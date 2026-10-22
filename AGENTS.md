@@ -27,5 +27,4 @@ carry the longer contracts. Preserve them when behavior changes.
 
 Release: push an annotated MAJOR.MINOR.PATCH tag on main, higher than every
 existing version tag. Hosted Xcode CI validates the tag, runs offline tests and
-publishes its source release using the tag message. No tag is pushed during
-publication preparation; visibility and the first release await lead approval.
+publishes its source release using the tag message.

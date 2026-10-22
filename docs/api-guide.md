@@ -15,8 +15,8 @@ Transcription supports pluggable batch and realtime providers:
 - OpenAI Realtime transcription session API
 
 `DictationRecordingStore` saves dictation audio to disk while it is recorded, so
-a crash, force-quit, reinstall, dead battery or failed transcription never loses
-it.
+process interruption or failed transcription leaves a recoverable local recording.
+Uninstalling the app can remove its container; keep independent backups where required.
 
 Speech synthesis currently supports Gemini 3.1 Flash TTS Preview through both
 the Generate Content and Interactions APIs, including incremental network
@@ -255,7 +255,7 @@ separate local directory per container. The library never chooses a container.
   `accountEvents()` is the single owner of `CKAccountChanged`. `status().failures`
   exposes individual recovery/publication failures without blocking healthy captures.
   Profile edits and explicit releases require the editor's frozen account session.
-  SpeechKit updates its local canonical dictionary through `updateDictionarySnapshot`;
+  The containing app updates its local canonical dictionary through `updateDictionarySnapshot`;
   this changes no CloudKit vocabulary records.
 - Errors: not signed in (`accountUnavailable`), not configured
   (`notConfigured`), cloud failure (`cloudFailure`) and `profileUnavailable` are
