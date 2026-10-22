@@ -171,7 +171,7 @@ The relay contract:
 ### Swift Package Manager
 
 ```swift
-.package(url: "https://github.com/emileberhard/SpeechKit.git", exact: "1.0.0")
+.package(url: "https://github.com/emileberhard/SpeechKit.git", exact: "0.1.0")
 ```
 
 ### Tuist project usage
