@@ -50,6 +50,10 @@ leases never cross container boundaries.
 swift test --jobs 4
 ```
 
+An annotated `MAJOR.MINOR.PATCH` tag on `main`, higher than all previous
+version tags, runs the checks and publishes a source release. Its tag message
+becomes the release notes.
+
 Default tests run offline. Live transcription and synthesis tests are opt-in,
 configured through environment variables. No credentials or audio are bundled.
 See [integration setup](docs/api-guide.md#integration-tests) and
