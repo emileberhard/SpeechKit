@@ -19,6 +19,7 @@ actor FakeCloud: LibraryCloud {
     private var profileReadStarted: CheckedContinuation<Void, Never>?
     private var zoneMissing = false
     private var corruptChunks = false
+    private var failAfterSavingRecord: String?
     let pageSize = 2
 
     init(account: String? = "account-a", profile: DictationProfile? = nil) {
@@ -31,6 +32,7 @@ actor FakeCloud: LibraryCloud {
     func failProfile(_ value: Bool) { profileFailure = value }
     func deleteZone() { zoneMissing = true; records = [:]; log = [] }
     func corrupt(_ value: Bool) { corruptChunks = value }
+    func failAfterSavingRecord(named name: String) { failAfterSavingRecord = name }
     func replaceRecord(_ record: CKRecord) { records[record.recordID.recordName] = record }
 
     func accountIdentifier() async throws -> String? { account }
@@ -68,6 +70,10 @@ actor FakeCloud: LibraryCloud {
         }
         records[name] = record
         log.append(name)
+        if failAfterSavingRecord == name {
+            failAfterSavingRecord = nil
+            throw CKError(.networkUnavailable)
+        }
     }
 
     func changes(since token: Data?, desiredKeys: [String]) async throws -> LibraryCloudPage {

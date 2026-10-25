@@ -424,6 +424,52 @@ import Testing
         #expect(await cloud.resultRecordNames().contains(DictationLibrarySchema.resultName(late.id)))
     }
 
+    @Test func partialPublicationResumesAtOriginalChunkOffsetsAfterAnUncertainUpload() async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = FakeCloud(profile: TestSupport.profile)
+        let chunkBytes = 1_024
+        let store = try TestSupport.store(directory, cloud: cloud, chunkBytes: chunkBytes)
+        _ = try await store.refresh()
+        let plan = try await store.makePlan(context: .chat, capabilities: TestSupport.capabilities())
+        let writer = try await store.beginCapture(plan: plan)
+        let audio = TestSupport.buffer(seconds: 1)
+        for index in 0..<Int(audio.frameLength) { audio.floatChannelData![0][index] = 0.4 * sin(Float(index) * 0.05) }
+        try writer.configure(format: audio.format)
+        writer.append(audio)
+        let capture = try await writer.finish()
+        let original = try Data(contentsOf: writer.originalURL)
+        try #require(original.count > 3 * chunkBytes)
+        let names = (0..<3).map { DictationLibrarySchema.chunkName(capture.id, index: $0) }
+        await cloud.failAfterSavingRecord(named: names[1])
+
+        let interrupted = try await store.publishPending()
+        #expect(interrupted.pendingCaptureCount == 1)
+        #expect(interrupted.failures.map(\.captureID) == [capture.id])
+        let folder = writer.originalURL.deletingLastPathComponent()
+        let receipts = try LibraryFiles.read([String].self, at: folder.appending(path: "published.json"))
+        #expect(receipts.contains(names[0]))
+        #expect(!receipts.contains(names[1]))
+        #expect(await cloud.records.keys.contains(names[1]))
+        #expect(!receipts.contains(names[2]))
+        #expect(await cloud.records.keys.contains(names[2]) == false)
+
+        let reopened = try TestSupport.store(directory, cloud: cloud, chunkBytes: chunkBytes)
+        _ = try await reopened.refresh()
+        let resumed = try await reopened.publishPending()
+        #expect(resumed.pendingCaptureCount == 0)
+        #expect(resumed.failures.isEmpty)
+        let chunkCount = (original.count - 1) / chunkBytes + 1
+        #expect(await cloud.createCount == chunkCount + 2)
+        let records = await cloud.records
+        for index in [1, 2] {
+            let record = try #require(records[names[index]])
+            let uploaded = try await cloud.originalChunk(record.recordID)
+            let expected = original.subdata(in: (index * chunkBytes)..<((index + 1) * chunkBytes))
+            #expect(uploaded == expected)
+        }
+    }
+
     @Test func failedRecoveryRetriesAndSuccessfulRecoveryIsNotRepeated() async throws {
         let directory = try TestSupport.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -466,7 +512,9 @@ import Testing
             invalid.originalByteCount = 1
             try LibraryFiles.write(invalid, to: manifest)
         } else {
-            try Data("corrupt".utf8).write(to: original)
+            var corrupt = bytes
+            corrupt[corrupt.count / 2] ^= 0xFF
+            try corrupt.write(to: original)
         }
         let failed = try await store.publishPending()
         #expect(failed.pendingCaptureCount == 1)
