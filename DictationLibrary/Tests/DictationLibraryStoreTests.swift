@@ -394,4 +394,89 @@ import Testing
         #expect(failures.map(\.captureID) == [badID])
         #expect(FileManager.default.fileExists(atPath: badFolder.path))
     }
+    @Test func publishedPayloadsAreNotReopenedAndNewWorkStillPublishes() async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = FakeCloud(profile: TestSupport.profile)
+        let store = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        let plan = try await store.makePlan(context: .chat, capabilities: TestSupport.capabilities())
+        let capture = try await TestSupport.capture(store: store, plan: plan)
+        let result = TestSupport.result(for: capture)
+        try await store.addResult(result)
+        try await store.publishPending()
+        let creates = await cloud.createCount
+        let folder = LibraryFiles(root: directory).folder(capture.id, account: "account-a")
+        try FileManager.default.removeItem(at: folder.appending(path: "original.caf"))
+        try Data("already acknowledged".utf8).write(to: folder.appending(path: "results/\(result.id.uuidString).json"))
+
+        let restarted = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        let published = try await restarted.publishPending()
+        #expect(published.pendingCaptureCount == 0)
+        #expect(published.failures.isEmpty)
+        #expect(await cloud.createCount == creates)
+        let late = TestSupport.result(for: capture, text: "late")
+        try await restarted.addResult(late)
+        let newCapture = try await TestSupport.capture(store: restarted, plan: restarted.makePlan(context: .chat, capabilities: TestSupport.capabilities()))
+        let status = try await restarted.publishPending()
+        #expect(status.pendingCaptureCount == 0)
+        #expect(status.failures.isEmpty)
+        #expect(await cloud.records.keys.contains(DictationLibrarySchema.captureName(newCapture.id)))
+        #expect(await cloud.resultRecordNames().contains(DictationLibrarySchema.resultName(late.id)))
+    }
+
+    @Test func failedRecoveryRetriesAndSuccessfulRecoveryIsNotRepeated() async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = FakeCloud(profile: TestSupport.profile)
+        let store = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        var capture = try await TestSupport.capture(store: store, plan: store.makePlan(context: .chat, capabilities: TestSupport.capabilities()))
+        let folder = LibraryFiles(root: directory).folder(capture.id, account: "account-a")
+        let manifest = folder.appending(path: "capture.json")
+        capture.originalSHA256 = nil
+        capture.originalByteCount = nil
+        let validManifest = try LibraryFiles.encode(capture)
+        try Data("invalid".utf8).write(to: manifest)
+        let restarted = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        #expect(try await restarted.recoverInterruptedCaptures().isEmpty)
+        #expect(try await restarted.status().failures.map(\.captureID) == [capture.id])
+        try validManifest.write(to: manifest)
+        let recovered = try await restarted.recoverInterruptedCaptures()
+        #expect(recovered.map(\.id) == [capture.id])
+        #expect(recovered.first?.interrupted == true)
+        #expect(try await restarted.status().failures.isEmpty)
+        try Data("must not reopen a completed recovery".utf8).write(to: manifest)
+        #expect(try await restarted.recoverInterruptedCaptures().isEmpty)
+        try LibraryFiles.write(recovered[0], to: manifest)
+        #expect(try await restarted.status().failures.isEmpty)
+        #expect(try await restarted.publishPending().pendingCaptureCount == 0)
+    }
+
+    @Test(arguments: [false, true])
+    func unpublishedOriginalIsValidatedBeforeAnyPublication(wrongByteCount: Bool) async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = FakeCloud(profile: TestSupport.profile)
+        let store = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        let capture = try await TestSupport.capture(store: store, plan: store.makePlan(context: .chat, capabilities: TestSupport.capabilities()))
+        let original = LibraryFiles(root: directory).folder(capture.id, account: "account-a").appending(path: "original.caf")
+        let bytes = try Data(contentsOf: original)
+        let manifest = original.deletingLastPathComponent().appending(path: "capture.json")
+        if wrongByteCount {
+            var invalid = capture
+            invalid.originalByteCount = 1
+            try LibraryFiles.write(invalid, to: manifest)
+        } else {
+            try Data("corrupt".utf8).write(to: original)
+        }
+        let failed = try await store.publishPending()
+        #expect(failed.pendingCaptureCount == 1)
+        #expect(failed.failures.map(\.captureID) == [capture.id])
+        #expect(await cloud.createCount == 0)
+        try bytes.write(to: original)
+        try LibraryFiles.write(capture, to: manifest)
+        let retried = try await store.publishPending()
+        #expect(retried.pendingCaptureCount == 0)
+        #expect(retried.failures.isEmpty)
+    }
+
 }

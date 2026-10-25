@@ -18,6 +18,10 @@ A SwiftPM library with two products: `SpeechKit` and optional `DictationLibrary`
   CloudKit container and an isolated local directory. Account changes never
   adopt another account's captures. Release acknowledged originals only through
   an explicit caller-confirmed operation.
+- One store owns its isolated directory. Publication checks immutable record
+  receipts before opening payloads and returns status from the same inventory.
+  Recovery retries failed/active candidates but never rescans completed ones
+  during that store lifetime; reopening inventories disk again.
 - Tests use Swift Testing and synthetic inputs. Default tests stay offline;
   optional paid suites use environment-provided router or relay access. Audio
   fixtures and diagnostics are local and ignored. Do not publish transcripts.

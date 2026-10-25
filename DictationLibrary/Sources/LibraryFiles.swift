@@ -65,6 +65,17 @@ struct LibraryFiles: Sendable {
             .map { try Self.read(DictationCapture.self, at: $0.appending(path: "capture.json")) }
     }
 
+    static func resultFiles(in folder: URL) throws -> [URL] {
+        let directory = folder.appending(path: "results")
+        guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+        return try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }
+            .map { url in
+                guard UUID(uuidString: url.deletingPathExtension().lastPathComponent) != nil else { throw DictationLibraryError.invalidRecord(url.lastPathComponent) }
+                return url
+            }
+    }
+
     static func results(in folder: URL) throws -> [DictationResultVersion] {
         try results(inDirectory: folder.appending(path: "results"))
     }

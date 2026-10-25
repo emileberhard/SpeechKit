@@ -18,6 +18,8 @@ final class LibraryCapacity: Sendable {
         self.used = OSAllocatedUnfairLock(initialState: used)
     }
 
+    var usedBytes: Int64 { used.withLock { $0 } }
+
     func reserve(_ count: Int64) throws {
         try used.withLock { used in
             guard count >= 0, count <= limit - used else { throw DictationLibraryError.capacityExceeded(limit: limit, used: used) }
