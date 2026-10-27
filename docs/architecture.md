@@ -48,3 +48,27 @@ excluding fixture construction. Against `d5e03d9`, audio reads fell from 132
 (1,953,468 bytes) to zero; metadata reads fell from 593 (272,398 bytes) to 168
 (69,653 bytes). These are application read counts, not kernel disk I/O or device
 CPU measurements. The optimized consumer uses the returned publication status.
+
+## Build and release ownership
+
+The public package remains SwiftPM-only. Both products require Apple frameworks,
+so hosted macOS tests and a generic iOS Release build cover the supported
+platforms; a Linux lane would require a product change. `DictationLibrary`'s
+generated Xcode scheme includes its `SpeechKit` dependency, so one unsigned iOS
+build covers both products without maintaining another project. The package has
+no external dependencies or lockfile. `.xcode-version` pins CI to Xcode 27.1;
+local commands use the developer's selected toolchain.
+
+CI owns all compilation and offline tests. Tag admission validates a plain,
+annotated, newest SemVer on the default branch, then waits for that commit's
+push CI rather than rebuilding it. Only the downstream Ubuntu source publisher
+gets a write token; it checks out and executes no package code. This replaces a
+macOS release job that ran the tests again with release credentials. The
+publisher reads the current tags before setting GitHub Latest, so an admitted
+release overtaken during its wait can still publish without replacing a newer
+release. It publishes the tag annotation verbatim as the release notes.
+
+This assumes source distribution remains the only release artifact. Adding a
+binary product would require CI and an unprivileged build stage to prove that
+artifact before publication. Tags remain immutable, and consumers control their
+pins; a library release neither upgrades nor deploys a consuming app.
