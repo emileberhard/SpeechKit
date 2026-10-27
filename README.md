@@ -9,7 +9,7 @@ The optional `DictationLibrary` product adds an account-fenced CloudKit archive.
 Requires Swift 6.4, iOS 16 or macOS 13. Add this Swift package:
 
 ```swift
-.package(url: "https://github.com/emileberhard/SpeechKit.git", exact: "0.1.2")
+.package(url: "https://github.com/emileberhard/SpeechKit.git", exact: "0.2.0")
 ```
 
 Link `SpeechKit`, and link `DictationLibrary` only if your app needs its archive.

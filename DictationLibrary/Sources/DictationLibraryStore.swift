@@ -196,6 +196,17 @@ public actor DictationLibraryStore {
     }
 
     public func makePlan(context: DictationContext, capabilities: DictationCapabilities) throws -> DictationPlan {
+        let (profile, session) = try verifiedProfile()
+        return DictationPlan(profile: profile, context: context, capabilities: capabilities, accountSession: session)
+    }
+
+    public func makePlan(context: DictationContext, capabilities: DictationCapabilities, dictionary: [String]) throws -> DictationPlan {
+        var (profile, session) = try verifiedProfile()
+        profile.dictionary = dictionary
+        return DictationPlan(profile: profile, context: context, capabilities: capabilities, accountSession: session)
+    }
+
+    private func verifiedProfile() throws -> (DictationProfile, DictationAccountSession) {
         guard let session else { throw DictationLibraryError.accountUnavailable }
         switch profile {
         case .absent: throw DictationLibraryError.notConfigured
@@ -203,7 +214,7 @@ public actor DictationLibraryStore {
         case .ready: break
         }
         guard case .ready(let snapshot) = profile, snapshot.accountIdentifier == session.accountIdentifier else { throw DictationLibraryError.profileUnavailable }
-        return DictationPlan(profile: snapshot.profile, context: context, capabilities: capabilities, accountSession: session)
+        return (snapshot.profile, session)
     }
 
     public func validateAccountSession(_ lease: DictationAccountSession) throws { try validate(lease) }

@@ -24,6 +24,28 @@ import Testing
         #expect(try await restarted.refresh()?.profile == updated)
     }
 
+    @Test func aPlanKeepsTheCallersDictionaryWhenARefreshLandsAroundIt() async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var uploaded = TestSupport.profile
+        uploaded.dictionary = ["Uploaded"]
+        let cloud = FakeCloud(profile: uploaded)
+        let store = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        let session = try #require(await store.accountSession())
+        let canonical = ["Uploaded", "Pending"]
+        await cloud.holdNextProfileRead()
+        let refresh = Task { try await store.refresh() }
+        await cloud.waitUntilProfileReadHeld()
+        try await store.updateDictionarySnapshot(canonical, session: session)
+        let duringRefresh = try await store.makePlan(context: .prose, capabilities: TestSupport.capabilities(), dictionary: canonical)
+        await cloud.releaseProfileRead()
+        #expect(try await refresh.value?.profile.dictionary == ["Uploaded"])
+        #expect(try await store.makePlan(context: .prose, capabilities: TestSupport.capabilities()).dictionary == ["Uploaded"])
+        let afterRefresh = try await store.makePlan(context: .prose, capabilities: TestSupport.capabilities(), dictionary: canonical)
+        #expect(duringRefresh.dictionary == canonical)
+        #expect(afterRefresh.dictionary == canonical)
+    }
+
     @Test func publicStoreCanRecordLocallyWithoutConstructingCloudKit() async throws {
         let directory = try TestSupport.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

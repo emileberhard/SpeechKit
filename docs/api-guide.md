@@ -246,8 +246,11 @@ separate local directory per container. The library never chooses a container.
 
 - `DictationLibraryStore` (producer, per app): `refresh()` verifies the iCloud
   account and loads the profile; `makePlan(context:capabilities:)` freezes the
-  verified profile and account session. `beginCapture(plan:)` rejects a plan from
-  an earlier account session. `DictationCaptureWriter.append(_:)` takes raw
+  verified profile and account session. An app that owns the canonical
+  dictionary passes it to `makePlan(context:capabilities:dictionary:)`, which
+  freezes it in the same step, so a concurrent refresh cannot replace it.
+  `beginCapture(plan:)` rejects a plan from an earlier account session.
+  `DictationCaptureWriter.append(_:)` takes raw
   `AVAudioPCMBuffer`s before provider conversion; `finish()` seals a 48 kHz mono
   Opus CAF (`originalURL`). `addResult(_:)` stores immutable result versions, each
   with the `DictationPlan` it ran under, in the capture's original account
