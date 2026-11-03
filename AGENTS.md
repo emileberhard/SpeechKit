@@ -42,8 +42,11 @@ credentials, personal configuration, raw provider output or recordings.
   because its metadata is unreadable or an upload merely started.
 - DictationLibrary owns account leases and publication. The caller supplies the
   CloudKit container and an isolated local directory. Account changes never
-  adopt another account's captures. Release acknowledged originals only through
-  an explicit caller-confirmed operation.
+  adopt another account's captures. Each publication pass releases the current
+  account's oldest fully acknowledged originals until the store is at most half
+  full, so capture never stops for audio CloudKit already holds. Unacknowledged,
+  held and other-account originals are never released, and an original is
+  released only after CloudKit confirms its capture and chunk records.
 - One store owns its isolated directory. Publication checks immutable record
   receipts before opening payloads and returns status from the same inventory.
   Recovery retries failed/active candidates but never rescans completed ones

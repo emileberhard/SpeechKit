@@ -7,6 +7,7 @@ protocol LibraryCloud: Sendable {
     func profile() async throws -> DictationProfile?
     func saveProfile(_ profile: DictationProfile) async throws
     func create(_ record: CKRecord) async throws
+    func missing(_ ids: [CKRecord.ID]) async throws -> Set<CKRecord.ID>
     func changes(since token: Data?, desiredKeys: [String]) async throws -> LibraryCloudPage
     func originalChunk(_ id: CKRecord.ID) async throws -> Data
 }
@@ -154,6 +155,29 @@ struct CloudKitLibraryCloud: LibraryCloud {
                 throw DictationLibraryError.contentConflict(record.recordID.recordName)
             }
         }
+    }
+
+    func missing(_ ids: [CKRecord.ID]) async throws -> Set<CKRecord.ID> {
+        var missing: Set<CKRecord.ID> = []
+        for start in stride(from: 0, to: ids.count, by: 200) {
+            let batch = Array(ids[start..<min(start + 200, ids.count)])
+            let results: [CKRecord.ID: Result<CKRecord, any Error>]
+            do { results = try await database.records(for: batch, desiredKeys: []) }
+            catch let error as CKError where Self.isMissing(error) { missing.formUnion(batch); continue }
+            for id in batch {
+                switch results[id] {
+                case .success?: continue
+                case .failure(let error as CKError)? where Self.isMissing(error): missing.insert(id)
+                case .failure(let error)?: throw error
+                case nil: missing.insert(id)
+                }
+            }
+        }
+        return missing
+    }
+
+    private static func isMissing(_ error: CKError) -> Bool {
+        [.unknownItem, .zoneNotFound, .userDeletedZone].contains(error.code)
     }
 
     func changes(since token: Data?, desiredKeys: [String]) async throws -> LibraryCloudPage {

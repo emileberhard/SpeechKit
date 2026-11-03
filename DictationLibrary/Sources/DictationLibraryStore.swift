@@ -57,6 +57,7 @@ public actor DictationLibraryStore {
     private var writers: [UUID: WeakWriter] = [:]
     private var publishing = false
     private var publishAgain = false
+    private var receiptsReset = false
     private var captureFailures: [String: String] = [:]
     private var recoveryFolders: Set<URL>?
 
@@ -150,7 +151,7 @@ public actor DictationLibraryStore {
             }
             guard let value else { profile = .absent; return nil }
             let snapshot = DictationProfileSnapshot(accountIdentifier: account, refreshedAt: .now, profile: value)
-            try capacity.write(snapshot, to: cachedURL)
+            try capacity.writeBeyondLimit(snapshot, to: cachedURL)
             profile = .ready(snapshot)
             return snapshot
         } catch {
@@ -181,7 +182,7 @@ public actor DictationLibraryStore {
         var value = snapshot.profile
         value.dictionary = terms
         let updated = DictationProfileSnapshot(accountIdentifier: lease.accountIdentifier, refreshedAt: snapshot.refreshedAt, profile: value)
-        try capacity.write(updated, to: files.partition(lease.accountIdentifier).appending(path: "profile.json"))
+        try capacity.writeBeyondLimit(updated, to: files.partition(lease.accountIdentifier).appending(path: "profile.json"))
         profile = .ready(updated)
     }
 
@@ -448,18 +449,53 @@ public actor DictationLibraryStore {
             let original = folder.appending(path: "original.caf")
             guard FileManager.default.fileExists(atPath: original.path) else { continue }
             guard isPublished(capture, folder: folder), let finishedAt = capture.finishedAt, finishedAt < cutoff else { retained += 1; continue }
-            try capacity.write(ReleaseMarker(releasedAt: .now), to: folder.appending(path: Self.releaseMarker))
-            let size = Int64(try original.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
-            try RecordingFileSystem.remove(original)
-            capacity.release(size)
+            bytes += try release(original)
             count += 1
-            bytes += size
         }
         return DictationReleaseReport(releasedCount: count, releasedBytes: bytes, retainedUnpublishedCount: retained)
     }
 
+    private func release(_ original: URL) throws -> Int64 {
+        try capacity.writeBeyondLimit(ReleaseMarker(releasedAt: .now), to: original.deletingLastPathComponent().appending(path: Self.releaseMarker))
+        let size = Int64(try original.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
+        try RecordingFileSystem.remove(original)
+        capacity.release(size)
+        return size
+    }
+
+    private func reclaimPublishedOriginals(_ inventory: [PublicationCapture], lease: DictationAccountSession) async throws {
+        let retainedBytes = capacity.limit / 2
+        var remaining = inventory
+            .filter { $0.capture.account?.accountIdentifier == lease.accountIdentifier && isPublished($0)
+                && FileManager.default.fileExists(atPath: $0.folder.appending(path: "original.caf").path) }
+            .sorted { $0.capture.startedAt < $1.capture.startedAt }[...]
+        while capacity.usedBytes > retainedBytes, !remaining.isEmpty, !publishAgain {
+            var batch: [(item: PublicationCapture, names: [String])] = []
+            var batchBytes: Int64 = 0
+            while batchBytes < capacity.usedBytes - retainedBytes, let item = remaining.popFirst() {
+                batch.append((item, [DictationLibrarySchema.captureName(item.capture.id)] + chunkNames(item.capture)))
+                batchBytes += item.capture.originalByteCount ?? 0
+            }
+            let missing = try? await cloud.missing(batch.flatMap(\.names).map { CKRecord.ID(recordName: $0, zoneID: DictationLibrarySchema.zone) })
+            try validate(lease)
+            guard !receiptsReset, !publishAgain, let missing else { return }
+            let missingNames = Set(missing.map(\.recordName))
+            for (item, names) in batch {
+                let folder = item.folder.resolvingSymlinksInPath().path
+                let original = item.folder.appending(path: "original.caf")
+                guard !names.contains(where: missingNames.contains) else {
+                    captureFailures[folder] = "iCloud no longer has all of this uploaded recording, so its local original is kept."
+                    continue
+                }
+                guard capacity.usedBytes > retainedBytes, FileManager.default.fileExists(atPath: original.path) else { continue }
+                do { _ = try release(original) } catch { captureFailures[folder] = error.localizedDescription }
+            }
+        }
+    }
+
     @discardableResult public func reseedPublication(session: DictationAccountSession) throws -> Int {
         try validate(session)
+        if publishing { receiptsReset = true; publishAgain = true }
         var reset = 0
         for capture in try captures(account: session.accountIdentifier) {
             let folder = files.folder(capture.id, account: session.accountIdentifier)
@@ -478,6 +514,7 @@ public actor DictationLibraryStore {
         repeat {
             publishAgain = false
             let lease = try await verifiedSession()
+            receiptsReset = false
             inventory = try publicationInventory()
             for index in inventory.indices {
                 try validate(lease)
@@ -488,9 +525,11 @@ public actor DictationLibraryStore {
                     captureFailures[item.folder.resolvingSymlinksInPath().path] = nil
                 } catch DictationLibraryError.accountChanged { throw DictationLibraryError.accountChanged }
                 catch is CancellationError { throw CancellationError() }
+                catch is ReceiptsReset { break }
                 catch { captureFailures[item.folder.resolvingSymlinksInPath().path] = error.localizedDescription }
             }
             try validate(lease)
+            try await reclaimPublishedOriginals(inventory, lease: lease)
         } while publishAgain
         return try status(inventory: inventory)
     }
@@ -503,7 +542,7 @@ public actor DictationLibraryStore {
         let missingChunks = chunkNames(capture).enumerated().filter { !acknowledged.contains($0.element) }
         let captureName = DictationLibrarySchema.captureName(capture.id)
         let original = folder.appending(path: "original.caf")
-        let released = FileManager.default.fileExists(atPath: folder.appending(path: Self.releaseMarker).path)
+        let released = FileManager.default.fileExists(atPath: folder.appending(path: Self.releaseMarker).path) && !FileManager.default.fileExists(atPath: original.path)
         if !released, !missingChunks.isEmpty || !acknowledged.contains(captureName) {
             guard Int64(try original.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) == byteCount,
                   try LibraryFiles.hashFile(original) == capture.originalSHA256 else { throw DictationLibraryError.contentConflict(capture.id.uuidString) }
@@ -546,6 +585,7 @@ public actor DictationLibraryStore {
         try validate(lease)
         do { try await cloud.create(record) } catch { throw Self.libraryError(error) }
         try validate(lease)
+        guard !receiptsReset else { throw ReceiptsReset() }
         acknowledged.insert(record.recordID.recordName)
         try capacity.write(acknowledged.sorted(), to: folder.appending(path: Self.acknowledgementFile))
     }
@@ -586,6 +626,7 @@ public actor DictationLibraryStore {
     }
 
     private struct ReleaseMarker: Codable { let releasedAt: Date }
+    private struct ReceiptsReset: Error {}
     private static let releaseMarker = "released.json"
     private static let acknowledgementFile = "published.json"
 }

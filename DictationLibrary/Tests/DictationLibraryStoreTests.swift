@@ -353,6 +353,131 @@ import Testing
         #expect(try await store.status().pendingCaptureCount == 0)
     }
 
+    @Test func publicationReleasesTheOldestUploadedOriginalsUntilHalfTheCapacityIsFree() async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = FakeCloud(profile: TestSupport.profile)
+        let roomy = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        let plan = try await roomy.makePlan(context: .prose, capabilities: TestSupport.capabilities())
+        let held = try await TestSupport.capture(store: roomy, plan: DictationPlan(unverifiedProfile: TestSupport.profile, context: .prose, capabilities: TestSupport.capabilities()))
+        let oldest = try await TestSupport.capture(store: roomy, plan: plan)
+        let newest = try await TestSupport.capture(store: roomy, plan: plan)
+        let oldestBytes = try #require(oldest.originalByteCount)
+        let newestBytes = try #require(newest.originalByteCount)
+        try #require(oldestBytes > 8_192)
+        let uploaded = try await roomy.publishPending()
+        #expect(uploaded.releasableBytes == oldestBytes + newestBytes)
+
+        let limit = 2 * (uploaded.usedBytes - oldestBytes + 4_096)
+        let tight = try await TestSupport.verifiedStore(directory, cloud: cloud, capacity: limit)
+        let status = try await tight.publishPending()
+        #expect(status.usedBytes <= limit / 2)
+        #expect(status.releasableBytes == newestBytes)
+        #expect(status.failures.isEmpty)
+        let entries = try await tight.entries()
+        #expect(entries.first { $0.id == oldest.id }?.originalURL == nil)
+        #expect(entries.first { $0.id == newest.id }?.originalURL != nil)
+        #expect(try await tight.heldCaptures().first { $0.id == held.id }?.originalURL != nil)
+    }
+
+    @Test func aFullStoreStillReleasesUploadedOriginals() async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = FakeCloud(profile: TestSupport.profile)
+        let roomy = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        let capture = try await TestSupport.capture(store: roomy, plan: roomy.makePlan(context: .prose, capabilities: TestSupport.capabilities()))
+        let uploaded = try await roomy.publishPending()
+
+        let full = try await TestSupport.verifiedStore(directory, cloud: cloud, capacity: uploaded.usedBytes)
+        let status = try await full.publishPending()
+        #expect(status.failures.isEmpty)
+        #expect(status.usedBytes < uploaded.usedBytes)
+        #expect(try await full.entries().first { $0.id == capture.id }?.originalURL == nil)
+    }
+
+    @Test func publicationNeverReleasesUnacknowledgedOriginals() async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = FakeCloud(profile: TestSupport.profile)
+        let roomy = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        let plan = try await roomy.makePlan(context: .prose, capabilities: TestSupport.capabilities())
+        let uploaded = try await TestSupport.capture(store: roomy, plan: plan)
+        try await roomy.publishPending()
+        let pending = try await TestSupport.capture(store: roomy, plan: plan)
+
+        let limit = try await roomy.status().usedBytes / 2
+        let tight = try await TestSupport.verifiedStore(directory, cloud: cloud, capacity: limit)
+        await cloud.failAfterSavingRecord(named: DictationLibrarySchema.captureName(pending.id))
+        let status = try await tight.publishPending()
+        #expect(status.usedBytes > limit / 2)
+        let entries = try await tight.entries()
+        #expect(entries.first { $0.id == uploaded.id }?.originalURL == nil)
+        #expect(entries.first { $0.id == pending.id }?.originalURL != nil)
+    }
+
+    @Test func originalsICloudNoLongerFullyHasAreKeptAndReportedWhileOthersAreReleased() async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = FakeCloud(profile: TestSupport.profile)
+        let roomy = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        let plan = try await roomy.makePlan(context: .prose, capabilities: TestSupport.capabilities())
+        let lost = try await TestSupport.capture(store: roomy, plan: plan)
+        let held = try await TestSupport.capture(store: roomy, plan: plan)
+        let uploaded = try await roomy.publishPending()
+
+        await cloud.removeRecord(named: DictationLibrarySchema.chunkName(lost.id, index: 0))
+        let full = try await TestSupport.verifiedStore(directory, cloud: cloud, capacity: uploaded.usedBytes)
+        let status = try await full.publishPending()
+        #expect(status.failures.map(\.captureID) == [lost.id])
+        let entries = try await full.entries()
+        #expect(entries.first { $0.id == lost.id }?.originalURL != nil)
+        #expect(entries.first { $0.id == held.id }?.originalURL == nil)
+    }
+
+    @Test func aReseedDuringPublicationReleasesOnlyOriginalsCloudKitHoldsAgain() async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = FakeCloud(profile: TestSupport.profile)
+        let roomy = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        let plan = try await roomy.makePlan(context: .prose, capabilities: TestSupport.capabilities())
+        let restored = try await TestSupport.capture(store: roomy, plan: plan)
+        try await roomy.publishPending()
+        let pending = try await TestSupport.capture(store: roomy, plan: plan)
+
+        let tight = try await TestSupport.verifiedStore(directory, cloud: cloud, capacity: roomy.status().usedBytes + 4_096)
+        await cloud.holdCreate(named: DictationLibrarySchema.captureName(pending.id))
+        let publication = Task { try await tight.publishPending() }
+        await cloud.waitUntilCreateHeld()
+        await cloud.deleteZone()
+        try await tight.reseedPublication(session: #require(await tight.accountSession()))
+        await cloud.releaseCreate()
+        _ = try await publication.value
+
+        let names = await cloud.records.keys
+        for capture in [restored, pending] {
+            let bytes = try #require(capture.originalByteCount)
+            let chunks = (0..<Int((bytes - 1) / 16_384 + 1)).map { DictationLibrarySchema.chunkName(capture.id, index: $0) }
+            #expect(Set(chunks + [DictationLibrarySchema.captureName(capture.id)]).isSubset(of: names))
+        }
+    }
+
+    @Test func reseedUploadsAnOriginalWhoseReleaseWasInterrupted() async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = FakeCloud(profile: TestSupport.profile)
+        let store = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        let capture = try await TestSupport.capture(store: store, plan: store.makePlan(context: .prose, capabilities: TestSupport.capabilities()))
+        try await store.publishPending()
+        let original = try #require(try await store.entries().first?.originalURL)
+        try Data(#"{"releasedAt":0}"#.utf8).write(to: original.deletingLastPathComponent().appending(path: "released.json"))
+
+        await cloud.deleteZone()
+        try await store.reseedPublication(session: #require(await store.accountSession()))
+        let status = try await store.publishPending()
+        #expect(status.pendingCaptureCount == 0)
+        #expect(await cloud.records.keys.contains(DictationLibrarySchema.chunkName(capture.id, index: 0)))
+    }
+
     @Test func ownershipLookupSeparatesKnownArchiveIDsFromUnknown() async throws {
         let directory = try TestSupport.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

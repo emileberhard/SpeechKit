@@ -40,6 +40,14 @@ final class LibraryCapacity: Sendable {
     }
 
     func write(_ bytes: Data, to url: URL) throws {
+        try write(bytes, to: url, reserving: reserve)
+    }
+
+    func writeBeyondLimit<T: Encodable>(_ value: T, to url: URL) throws {
+        try write(LibraryFiles.encode(value), to: url) { count in used.withLock { $0 += count } }
+    }
+
+    private func write(_ bytes: Data, to url: URL, reserving reserve: (Int64) throws -> Void) throws {
         try RecordingFileSystem.createProtectedDirectory(url.deletingLastPathComponent())
         let previous = Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         let increase = Int64(bytes.count) - previous

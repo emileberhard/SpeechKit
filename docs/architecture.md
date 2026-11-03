@@ -3,7 +3,9 @@
 `SpeechKit` owns speech transports and durable recording. `DictationLibrary`
 adds CloudKit publication and explicit archive replication without changing
 capture or provider behavior. Apps own permissions, UI, capture, user consent,
-credentials and retention policy.
+credentials and retention policy. The producer store alone keeps its cache of
+CloudKit-acknowledged originals within half its cap, so capture never depends
+on an app remembering to free uploaded audio.
 
 Provider adapters encode each API and define the finalization contract.
 `SpeechProviderAccess` and the shared URLSession factory own authorization and

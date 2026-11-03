@@ -272,10 +272,19 @@ separate local directory per container. The library never chooses a container.
   `reconcileHeldCapture(id:session:)` is the explicit adoption step.
   `ownership(ofCapture:)` tells apps whether a recording ID is a known archive
   capture (`current`, `otherAccount`, `held`) or `unknown`.
-- Originals are never evicted. At the cap `beginCapture` or a seal throws
-  `capacityExceeded` and the audio stays. `releasePublishedOriginals(finishedBefore:session:)`
-  deletes only originals whose records are all acknowledged by CloudKit; that is
-  not an independent backup. `reseedPublication(session:)` re-uploads retained originals
+- Unacknowledged originals are never evicted. At the cap `beginCapture` or a
+  seal throws `capacityExceeded` and the audio stays. The profile cache and
+  release markers are small control metadata written even at the cap, so a full
+  store can still refresh and free space. `publishPending()`
+  releases the current account's oldest originals whose records are all
+  acknowledged by CloudKit until the store is at most half full, or until only
+  unacknowledged, held and other-account audio remains. It first fetches each
+  candidate's capture and chunk record metadata; an original CloudKit no longer
+  fully holds is kept and reported in `status().failures`, and a failed fetch
+  skips reclamation for that pass. An acknowledged capture's `originalURL` can
+  therefore disappear at any later publication.
+  `releasePublishedOriginals(finishedBefore:session:)` is the explicit decision
+  path: it releases acknowledged originals on request without that check. CloudKit acknowledgment is not an independent backup. `reseedPublication(session:)` re-uploads retained originals
   after a recognized iCloud key reset.
 - `DictationArchive` (reader and local replica, per account): `refresh()` is a
   metadata-only change-token catch-up (`desiredKeys` excludes the audio asset);

@@ -20,6 +20,9 @@ actor FakeCloud: LibraryCloud {
     private var zoneMissing = false
     private var corruptChunks = false
     private var failAfterSavingRecord: String?
+    private var heldCreateName: String?
+    private var heldCreate: CheckedContinuation<Void, Never>?
+    private var createHeldStarted: CheckedContinuation<Void, Never>?
     let pageSize = 2
 
     init(account: String? = "account-a", profile: DictationProfile? = nil) {
@@ -54,9 +57,20 @@ actor FakeCloud: LibraryCloud {
     }
     func releaseProfileRead() { heldProfileRead?.resume(); heldProfileRead = nil }
 
+    func holdCreate(named name: String) { heldCreateName = name }
+    func waitUntilCreateHeld() async {
+        if heldCreate != nil { return }
+        await withCheckedContinuation { createHeldStarted = $0 }
+    }
+    func releaseCreate() { heldCreate?.resume(); heldCreate = nil }
+
     func saveProfile(_ profile: DictationProfile) async throws { profileValue = profile }
 
     func create(_ record: CKRecord) async throws {
+        if heldCreateName == record.recordID.recordName {
+            heldCreateName = nil
+            await withCheckedContinuation { heldCreate = $0; createHeldStarted?.resume(); createHeldStarted = nil }
+        }
         createCount += 1
         let name = record.recordID.recordName
         if let existing = records[name] {
@@ -75,6 +89,9 @@ actor FakeCloud: LibraryCloud {
             throw CKError(.networkUnavailable)
         }
     }
+
+    func missing(_ ids: [CKRecord.ID]) async throws -> Set<CKRecord.ID> { Set(ids.filter { records[$0.recordName] == nil }) }
+    func removeRecord(named name: String) { records[name] = nil }
 
     func changes(since token: Data?, desiredKeys: [String]) async throws -> LibraryCloudPage {
         requestedKeys.append(desiredKeys)
