@@ -268,7 +268,7 @@ public actor DictationLibraryStore {
             if capture.account == nil { reason = .unverifiedPlan }
             else if capture.account?.accountIdentifier != session?.accountIdentifier { reason = .otherAccount }
             else { return nil }
-            let original = try files.folder(capture.id, account: capture.account?.accountIdentifier).appending(path: "original.caf")
+            let original = files.folder(capture.id, account: capture.account?.accountIdentifier).appending(path: "original.caf")
             return DictationHeldCapture(capture: capture, reason: reason, originalURL: FileManager.default.fileExists(atPath: original.path) ? original : nil)
         }.sorted { $0.capture.startedAt > $1.capture.startedAt }
     }

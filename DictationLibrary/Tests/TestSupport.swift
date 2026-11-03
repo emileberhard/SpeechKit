@@ -98,7 +98,7 @@ actor FakeCloud: LibraryCloud {
         if zoneMissing { throw LibraryCloudError.zoneMissing }
         let start = token.flatMap { String(data: $0, encoding: .utf8) }.flatMap(Int.init) ?? 0
         let end = min(log.count, start + pageSize)
-        let page = try log[start..<end].map { name -> CKRecord in
+        let page = log[start..<end].map { name -> CKRecord in
             let source = records[name]!
             let projected = CKRecord(recordType: source.recordType, recordID: source.recordID)
             for key in desiredKeys {
