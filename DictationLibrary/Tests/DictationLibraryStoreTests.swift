@@ -434,6 +434,26 @@ import Testing
         #expect(entries.first { $0.id == held.id }?.originalURL == nil)
     }
 
+    @Test func aFailedICloudCheckKeepsOriginalsAndIsReported() async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = FakeCloud(profile: TestSupport.profile)
+        let roomy = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        let capture = try await TestSupport.capture(store: roomy, plan: roomy.makePlan(context: .prose, capabilities: TestSupport.capabilities()))
+        let uploaded = try await roomy.publishPending()
+
+        await cloud.failMissingCheck(true)
+        let full = try await TestSupport.verifiedStore(directory, cloud: cloud, capacity: uploaded.usedBytes)
+        let status = try await full.publishPending()
+        #expect(status.failures.map(\.captureID) == [capture.id])
+        #expect(try await full.entries().first { $0.id == capture.id }?.originalURL != nil)
+
+        await cloud.failMissingCheck(false)
+        let recovered = try await full.publishPending()
+        #expect(recovered.failures.isEmpty)
+        #expect(try await full.entries().first { $0.id == capture.id }?.originalURL == nil)
+    }
+
     @Test func aReseedDuringPublicationReleasesOnlyOriginalsCloudKitHoldsAgain() async throws {
         let directory = try TestSupport.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

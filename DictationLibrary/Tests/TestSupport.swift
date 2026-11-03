@@ -20,6 +20,7 @@ actor FakeCloud: LibraryCloud {
     private var zoneMissing = false
     private var corruptChunks = false
     private var failAfterSavingRecord: String?
+    private var missingCheckFails = false
     private var heldCreateName: String?
     private var heldCreate: CheckedContinuation<Void, Never>?
     private var createHeldStarted: CheckedContinuation<Void, Never>?
@@ -90,7 +91,11 @@ actor FakeCloud: LibraryCloud {
         }
     }
 
-    func missing(_ ids: [CKRecord.ID]) async throws -> Set<CKRecord.ID> { Set(ids.filter { records[$0.recordName] == nil }) }
+    func missing(_ ids: [CKRecord.ID]) async throws -> Set<CKRecord.ID> {
+        if missingCheckFails { throw CKError(.serviceUnavailable) }
+        return Set(ids.filter { records[$0.recordName] == nil })
+    }
+    func failMissingCheck(_ value: Bool) { missingCheckFails = value }
     func removeRecord(named name: String) { records[name] = nil }
 
     func changes(since token: Data?, desiredKeys: [String]) async throws -> LibraryCloudPage {

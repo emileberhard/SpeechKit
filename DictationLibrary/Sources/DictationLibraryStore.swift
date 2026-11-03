@@ -476,9 +476,18 @@ public actor DictationLibraryStore {
                 batch.append((item, [DictationLibrarySchema.captureName(item.capture.id)] + chunkNames(item.capture)))
                 batchBytes += item.capture.originalByteCount ?? 0
             }
-            let missing = try? await cloud.missing(batch.flatMap(\.names).map { CKRecord.ID(recordName: $0, zoneID: DictationLibrarySchema.zone) })
+            let missing: Set<CKRecord.ID>
+            do { missing = try await cloud.missing(batch.flatMap(\.names).map { CKRecord.ID(recordName: $0, zoneID: DictationLibrarySchema.zone) }) }
+            catch is CancellationError { throw CancellationError() }
+            catch {
+                try validate(lease)
+                if let oldest = batch.first?.item {
+                    captureFailures[oldest.folder.resolvingSymlinksInPath().path] = "Could not confirm that iCloud has this uploaded recording, so its local original is kept: \(Self.libraryError(error).localizedDescription)"
+                }
+                return
+            }
             try validate(lease)
-            guard !receiptsReset, !publishAgain, let missing else { return }
+            guard !receiptsReset, !publishAgain else { return }
             let missingNames = Set(missing.map(\.recordName))
             for (item, names) in batch {
                 let folder = item.folder.resolvingSymlinksInPath().path

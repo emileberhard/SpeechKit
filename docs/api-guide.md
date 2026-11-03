@@ -280,8 +280,8 @@ separate local directory per container. The library never chooses a container.
   acknowledged by CloudKit until the store is at most half full, or until only
   unacknowledged, held and other-account audio remains. It first fetches each
   candidate's capture and chunk record metadata; an original CloudKit no longer
-  fully holds is kept and reported in `status().failures`, and a failed fetch
-  skips reclamation for that pass. An acknowledged capture's `originalURL` can
+  fully holds is kept and reported in `status().failures`; a failed fetch keeps
+  every original and reports the oldest candidate for that pass. An acknowledged capture's `originalURL` can
   therefore disappear at any later publication.
   `releasePublishedOriginals(finishedBefore:session:)` is the explicit decision
   path: it releases acknowledged originals on request without that check. CloudKit acknowledgment is not an independent backup. `reseedPublication(session:)` re-uploads retained originals
