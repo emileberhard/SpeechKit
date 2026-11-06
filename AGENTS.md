@@ -1,7 +1,7 @@
 # SpeechKit
 
 A public SwiftPM library with two products: `SpeechKit` and optional
-`DictationLibrary`. It targets iOS 16 and macOS 13 with Swift 6.4.
+`DictationLibrary`. It targets iOS 26 and macOS 26 with Swift 6.4.
 
 ## Ownership
 

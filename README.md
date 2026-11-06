@@ -6,7 +6,7 @@ The optional `DictationLibrary` product adds an account-fenced CloudKit archive.
 
 ## Install
 
-Requires Swift 6.4, iOS 16 or macOS 13. Add this Swift package:
+Requires Swift 6.4, iOS 26 or macOS 26. Add this Swift package:
 
 ```swift
 .package(url: "https://github.com/emileberhard/SpeechKit.git", exact: "0.2.0")

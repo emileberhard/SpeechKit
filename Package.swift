@@ -4,8 +4,8 @@ import PackageDescription
 let package = Package(
     name: "SpeechKit",
     platforms: [
-        .iOS(.v16),
-        .macOS(.v13)
+        .iOS(.v26),
+        .macOS(.v26)
     ],
     products: [
         .library(
