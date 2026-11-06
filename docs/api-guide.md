@@ -259,7 +259,9 @@ separate local directory per container. The library never chooses a container.
   includes `unverifiedCaptureCount`, so foreground publication needs no separate
   status or held-capture scan. `recoverInterruptedCaptures()` inventories once
   per store and retries unresolved candidates on later calls.
-  `accountEvents()` is the single owner of `CKAccountChanged`. `status().failures`
+  `accountEvents()` is the single owner of `CKAccountChanged`. `accountSession()`
+  and `validateAccountSession(_:)` are synchronous and never wait for the
+  store's other work. `status().failures`
   exposes individual recovery/publication failures without blocking healthy captures.
   Profile edits and explicit releases require the editor's frozen account session.
   The containing app updates its local canonical dictionary through `updateDictionarySnapshot`;

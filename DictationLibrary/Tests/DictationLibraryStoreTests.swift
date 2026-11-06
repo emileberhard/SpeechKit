@@ -8,7 +8,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: directory) }
         let cloud = FakeCloud(profile: TestSupport.profile)
         let store = try await TestSupport.verifiedStore(directory, cloud: cloud)
-        let session = try #require(await store.accountSession())
+        let session = try #require(store.accountSession())
         await cloud.holdNextProfileRead()
         let refresh = Task { try await store.refresh() }
         await cloud.waitUntilProfileReadHeld()
@@ -31,7 +31,7 @@ import Testing
         uploaded.dictionary = ["Uploaded"]
         let cloud = FakeCloud(profile: uploaded)
         let store = try await TestSupport.verifiedStore(directory, cloud: cloud)
-        let session = try #require(await store.accountSession())
+        let session = try #require(store.accountSession())
         let canonical = ["Uploaded", "Pending"]
         await cloud.holdNextProfileRead()
         let refresh = Task { try await store.refresh() }
@@ -114,7 +114,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: directory) }
         let cloud = FakeCloud(profile: TestSupport.profile)
         let store = try await TestSupport.verifiedStore(directory, cloud: cloud)
-        let session = try #require(await store.accountSession())
+        let session = try #require(store.accountSession())
         try await store.updateDictionarySnapshot(["SampleApp", "Example Project"], session: session)
         let plan = try await store.makePlan(context: .chat, capabilities: TestSupport.capabilities())
         #expect(plan.dictionary == ["SampleApp", "Example Project"])
@@ -126,7 +126,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: directory) }
         let cloud = FakeCloud(profile: TestSupport.profile)
         let store = try await TestSupport.verifiedStore(directory, cloud: cloud)
-        let session = try #require(await store.accountSession())
+        let session = try #require(store.accountSession())
         await cloud.setProfile(nil)
         _ = try await store.refresh()
         #expect(await store.profileState() == .absent)
@@ -172,7 +172,7 @@ import Testing
         let capture = try await TestSupport.capture(store: store, plan: store.makePlan(context: .prose, capabilities: TestSupport.capabilities()), seconds: 2)
         let result = TestSupport.result(for: capture)
         try await store.addResult(result)
-        let account = try #require(await store.accountSession()).accountIdentifier
+        let account = try #require(store.accountSession()).accountIdentifier
         let file = LibraryFiles(root: directory).folder(capture.id, account: account).appending(path: "results/\(result.id.uuidString).json")
         let stored = try TestSupport.addingUnknownField(to: file)
         try await store.publishPending()
@@ -249,11 +249,15 @@ import Testing
         try await store.publishPending()
         #expect(await cloud.createCount == 0)
 
-        let lease = try #require(await store.accountSession())
+        let lease = try #require(store.accountSession())
         await store.accountDidChange()
+        #expect(store.accountSession() == nil)
+        #expect(throws: DictationLibraryError.accountChanged) { try store.validateAccountSession(lease) }
         await #expect(throws: DictationLibraryError.accountChanged) { try await store.reconcileHeldCapture(id: capture.id, session: lease) }
         _ = try await store.refresh()
-        let current = try #require(await store.accountSession())
+        let current = try #require(store.accountSession())
+        #expect(current != lease)
+        try store.validateAccountSession(current)
         try await store.reconcileHeldCapture(id: capture.id, session: current)
         #expect(try await store.ownership(ofCapture: capture.id) == .current)
         #expect(try await store.heldCaptures().isEmpty)
@@ -273,7 +277,7 @@ import Testing
         await cloud.setAccount("account-b")
         await #expect(throws: DictationLibraryError.accountChanged) { try await store.refresh() }
         _ = try await store.refresh()
-        #expect(await store.accountSession()?.accountIdentifier == "account-b")
+        #expect(store.accountSession()?.accountIdentifier == "account-b")
         #expect(try await store.ownership(ofCapture: capture.id) == .otherAccount)
 
         let late = TestSupport.result(for: capture)
@@ -316,7 +320,7 @@ import Testing
 
         let status = try await store.status()
         #expect(status.releasableBytes == 0)
-        let kept = try await store.releasePublishedOriginals(finishedBefore: .distantFuture, session: #require(await store.accountSession()))
+        let kept = try await store.releasePublishedOriginals(finishedBefore: .distantFuture, session: #require(store.accountSession()))
         #expect(kept.releasedCount == 0)
         #expect(kept.retainedUnpublishedCount == 1)
         #expect(try await store.entries().first?.originalURL != nil)
@@ -352,9 +356,9 @@ import Testing
         let before = try await store.status()
         #expect(before.releasableBytes == capture.originalByteCount)
 
-        let early = try await store.releasePublishedOriginals(finishedBefore: Date(timeIntervalSince1970: 0), session: #require(await store.accountSession()))
+        let early = try await store.releasePublishedOriginals(finishedBefore: Date(timeIntervalSince1970: 0), session: #require(store.accountSession()))
         #expect(early.releasedCount == 0)
-        let report = try await store.releasePublishedOriginals(finishedBefore: .distantFuture, session: #require(await store.accountSession()))
+        let report = try await store.releasePublishedOriginals(finishedBefore: .distantFuture, session: #require(store.accountSession()))
         #expect(report.releasedCount == 1)
         #expect(report.releasedBytes == capture.originalByteCount)
         let after = try await store.status()
@@ -484,7 +488,7 @@ import Testing
         let publication = Task { try await tight.publishPending() }
         await cloud.waitUntilCreateHeld()
         await cloud.deleteZone()
-        try await tight.reseedPublication(session: #require(await tight.accountSession()))
+        try await tight.reseedPublication(session: #require(tight.accountSession()))
         await cloud.releaseCreate()
         _ = try await publication.value
 
@@ -507,7 +511,7 @@ import Testing
         try Data(#"{"releasedAt":0}"#.utf8).write(to: original.deletingLastPathComponent().appending(path: "released.json"))
 
         await cloud.deleteZone()
-        try await store.reseedPublication(session: #require(await store.accountSession()))
+        try await store.reseedPublication(session: #require(store.accountSession()))
         let status = try await store.publishPending()
         #expect(status.pendingCaptureCount == 0)
         #expect(await cloud.records.keys.contains(DictationLibrarySchema.chunkName(capture.id, index: 0)))
@@ -533,7 +537,7 @@ import Testing
         let target = files.folder(capture.id, account: "account-a")
         try FileManager.default.moveItem(at: files.folder(capture.id, account: nil), to: target)
         let restarted = try await TestSupport.verifiedStore(directory, cloud: cloud)
-        let session = try #require(await restarted.accountSession())
+        let session = try #require(restarted.accountSession())
         try await restarted.reconcileHeldCapture(id: capture.id, session: session)
         #expect(try await restarted.ownership(ofCapture: capture.id) == .current)
         try await restarted.publishPending()

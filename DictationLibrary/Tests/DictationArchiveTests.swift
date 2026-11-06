@@ -275,6 +275,6 @@ import Testing
 
     private func producerSession(_ fixture: Fixture) async throws -> DictationAccountSession {
         let store = try await TestSupport.verifiedStore(fixture.directory.appending(path: "session"), cloud: fixture.cloud)
-        return try #require(await store.accountSession())
+        return try #require(store.accountSession())
     }
 }

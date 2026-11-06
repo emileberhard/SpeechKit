@@ -2,6 +2,7 @@ import AVFAudio
 import CloudKit
 import Foundation
 import SpeechKit
+import Synchronization
 
 public struct DictationAccountSession: Codable, Equatable, Sendable {
     public let accountIdentifier: String
@@ -49,7 +50,13 @@ public actor DictationLibraryStore {
     private let capacity: LibraryCapacity
     private static let captureHeadroomBytes: Int64 = 16_384
     private var epoch = UUID()
-    private var session: DictationAccountSession?
+    private var session: DictationAccountSession? {
+        didSet {
+            let current = session
+            publishedSession.withLock { $0 = current }
+        }
+    }
+    private nonisolated let publishedSession = Mutex<DictationAccountSession?>(nil)
     private var profile: DictationProfileState = .unverified
     private var profileRevision = UUID()
     private var accountObserver: AccountObservation?
@@ -75,7 +82,7 @@ public actor DictationLibraryStore {
         capacity = LibraryCapacity(limit: capacityBytes, used: try files.usedBytes())
     }
 
-    public func accountSession() -> DictationAccountSession? { session }
+    public nonisolated func accountSession() -> DictationAccountSession? { publishedSession.withLock { $0 } }
     public func profileState() -> DictationProfileState { profile }
 
     public func accountEvents() -> AsyncStream<DictationAccountSession?> {
@@ -218,7 +225,10 @@ public actor DictationLibraryStore {
         return (snapshot.profile, session)
     }
 
-    public func validateAccountSession(_ lease: DictationAccountSession) throws { try validate(lease) }
+    public nonisolated func validateAccountSession(_ lease: DictationAccountSession) throws {
+        try Task.checkCancellation()
+        guard accountSession() == lease else { throw DictationLibraryError.accountChanged }
+    }
 
     public func beginCapture(plan: DictationPlan) throws -> DictationCaptureWriter {
         guard plan.archiveEnabled else { throw DictationLibraryError.archiveDisabled }
