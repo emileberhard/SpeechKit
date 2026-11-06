@@ -126,6 +126,7 @@ actor FakeCloud: LibraryCloud {
     }
 
     func resultRecordNames() -> [String] { records.keys.filter { $0.hasPrefix("result-") }.sorted() }
+    func payload(named name: String) -> Data? { records[name]?.encryptedValues[DictationLibrarySchema.payloadKey] as? Data }
 }
 
 enum TestSupport {
@@ -174,6 +175,14 @@ enum TestSupport {
         let store = try store(directory, cloud: cloud, capacity: capacity)
         _ = try await store.refresh()
         return store
+    }
+
+    static func addingUnknownField(to url: URL) throws -> Data {
+        guard var object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any] else { throw CocoaError(.fileReadCorruptFile) }
+        object["fieldFromNewerBuild"] = "kept"
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        try data.write(to: url, options: .atomic)
+        return data
     }
 
     static func result(for capture: DictationCapture, text: String = "hello", kind: DictationResultKind = .providerOutput, id: UUID = UUID()) -> DictationResultVersion {

@@ -579,9 +579,9 @@ public actor DictationLibraryStore {
             let id = UUID(uuidString: url.deletingPathExtension().lastPathComponent)!
             let name = DictationLibrarySchema.resultName(id)
             guard !acknowledged.contains(name) else { continue }
-            let result = try LibraryFiles.read(DictationResultVersion.self, at: url)
+            let data = try Data(contentsOf: url)
+            let result = try LibraryFiles.decode(DictationResultVersion.self, from: data)
             guard result.id == id, result.captureID == capture.id else { throw DictationLibraryError.invalidRecord(name) }
-            let data = try LibraryFiles.encode(result)
             try await publish(DictationLibrarySchema.record(type: DictationLibrarySchema.resultRecordType, name: name, payload: data, hash: LibraryFiles.hash(data)), lease: lease, folder: folder, acknowledged: &acknowledged)
         }
         return acknowledged

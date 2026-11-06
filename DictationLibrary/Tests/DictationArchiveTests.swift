@@ -244,6 +244,20 @@ import Testing
         }
     }
 
+    @Test func pendingResultPublishesItsStoredBytes() async throws {
+        let fixture = try await Fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let session = try await producerSession(fixture)
+        try await fixture.archive.refresh()
+        let result = TestSupport.result(for: fixture.capture, text: "again", kind: .cleanup)
+        try await fixture.archive.addResult(result, session: session)
+        let folder = LibraryFiles(root: fixture.directory.appending(path: "archive")).partition(session.accountIdentifier).appending(path: "captures/\(fixture.capture.id.uuidString)")
+        let stored = try TestSupport.addingUnknownField(to: folder.appending(path: "outbox/\(result.id.uuidString).json"))
+        try await fixture.archive.publishPendingResults(session: session)
+        #expect(await fixture.cloud.payload(named: DictationLibrarySchema.resultName(result.id)) == stored)
+        #expect(try Data(contentsOf: folder.appending(path: "results/\(result.id.uuidString).json")) == stored)
+    }
+
     @Test func resultForAnotherVerifiedAccountIsRefused() async throws {
         let fixture = try await Fixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }

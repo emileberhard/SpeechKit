@@ -154,14 +154,17 @@ public actor DictationArchive {
         let partition = files.partition(account)
         for capture in try captures(in: partition) {
             let folder = captureFolder(capture.id, in: partition)
-            for result in try LibraryFiles.results(inDirectory: folder.appending(path: "outbox")) {
-                let payload = try LibraryFiles.encode(result)
+            for pending in try LibraryFiles.resultFiles(inDirectory: folder.appending(path: "outbox")) {
+                let payload = try Data(contentsOf: pending)
+                let result = try LibraryFiles.decode(DictationResultVersion.self, from: payload)
+                guard pending.deletingPathExtension().lastPathComponent == result.id.uuidString, result.captureID == capture.id else {
+                    throw DictationLibraryError.invalidRecord(pending.lastPathComponent)
+                }
                 guard try await cloud.accountIdentifier() == account else { throw DictationLibraryError.accountChanged }
                 do { try await cloud.create(DictationLibrarySchema.record(type: DictationLibrarySchema.resultRecordType, name: DictationLibrarySchema.resultName(result.id), payload: payload, hash: LibraryFiles.hash(payload))) }
                 catch let error as DictationLibraryError { throw error }
                 catch { throw DictationLibraryError.cloudFailure("\((error as NSError).domain) \((error as NSError).code)") }
                 guard try await cloud.accountIdentifier() == account else { throw DictationLibraryError.accountChanged }
-                let pending = folder.appending(path: "outbox/\(result.id.uuidString).json")
                 let confirmed = folder.appending(path: "results/\(result.id.uuidString).json")
                 try RecordingFileSystem.createProtectedDirectory(confirmed.deletingLastPathComponent())
                 if FileManager.default.fileExists(atPath: confirmed.path) {

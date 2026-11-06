@@ -164,6 +164,21 @@ import Testing
         #expect(await cloud.records.keys.sorted() == firstNames)
     }
 
+    @Test func resultPublishesItsStoredBytes() async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = FakeCloud(profile: TestSupport.profile)
+        let store = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        let capture = try await TestSupport.capture(store: store, plan: store.makePlan(context: .prose, capabilities: TestSupport.capabilities()), seconds: 2)
+        let result = TestSupport.result(for: capture)
+        try await store.addResult(result)
+        let account = try #require(await store.accountSession()).accountIdentifier
+        let file = LibraryFiles(root: directory).folder(capture.id, account: account).appending(path: "results/\(result.id.uuidString).json")
+        let stored = try TestSupport.addingUnknownField(to: file)
+        try await store.publishPending()
+        #expect(await cloud.payload(named: DictationLibrarySchema.resultName(result.id)) == stored)
+    }
+
     @Test func crashKeepsTheSavedPrefix() async throws {
         let directory = try TestSupport.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

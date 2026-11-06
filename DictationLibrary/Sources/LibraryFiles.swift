@@ -66,7 +66,10 @@ struct LibraryFiles: Sendable {
     }
 
     static func resultFiles(in folder: URL) throws -> [URL] {
-        let directory = folder.appending(path: "results")
+        try resultFiles(inDirectory: folder.appending(path: "results"))
+    }
+
+    static func resultFiles(inDirectory directory: URL) throws -> [URL] {
         guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
         return try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }

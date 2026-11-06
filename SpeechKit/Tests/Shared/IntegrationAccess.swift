@@ -49,7 +49,7 @@ enum IntegrationAccess {
         sec_protocol_options_set_verify_block(tls.securityProtocolOptions, { _, trust, complete in
             complete(leafMatches(sec_trust_copy_ref(trust).takeRetainedValue(), pin: pin))
         }, DispatchQueue(label: "SpeechKitTests.relayProxyTrust"))
-        var proxy = ProxyConfiguration(
+        let proxy = ProxyConfiguration(
             httpCONNECTProxy: .hostPort(host: NWEndpoint.Host(String(parts[0])), port: NWEndpoint.Port(integerLiteral: port)),
             tlsOptions: tls
         )
