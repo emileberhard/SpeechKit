@@ -547,7 +547,9 @@ or `.externallyManaged` when the app already coordinates the process-wide
 `AVAudioSession`. Optional playback callbacks report when audible playback starts
 and provide a normalized visualization frame with overall level, signed waveform
 peaks, and low-to-high frequency bands. SpeechKit installs no playback tap or
-analysis pipeline unless the visualization callback is supplied:
+analysis pipeline unless the visualization callback is supplied. Both callbacks
+run on the player's actor, so keep them short and hop to your own actor for UI
+work, as below:
 
 ```swift
 try await synthesizer.speak(

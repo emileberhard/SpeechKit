@@ -51,9 +51,11 @@ credentials, personal configuration, raw provider output or recordings.
   receipts before opening payloads and returns status from the same inventory.
   Recovery retries failed/active candidates but never rescans completed ones
   during that store lifetime; reopening inventories disk again.
-- Every target builds with `NonisolatedNonsendingByDefault`, so nonisolated
-  async code runs on the caller's actor. Mark `@concurrent` any function whose
-  CPU or file work grows with an audio, image or archive payload.
+- Every target builds with `NonisolatedNonsendingByDefault`, so a nonisolated
+  async function runs on the caller's actor. Mark `@concurrent` any nonisolated
+  async function whose CPU or file work grows with an audio, image or archive
+  payload; actor methods stay on their actor. Callback types run on whichever
+  actor invokes them, such as the player's playback callbacks.
 - Tests use Swift Testing and synthetic inputs. Default tests stay offline;
   optional paid suites use environment-provided router or relay access. Audio
   fixtures and diagnostics are local and ignored. Do not publish transcripts.
