@@ -50,13 +50,11 @@ public actor DictationLibraryStore {
     private let capacity: LibraryCapacity
     private static let captureHeadroomBytes: Int64 = 16_384
     private var epoch = UUID()
+    private nonisolated let sessionSnapshot = Mutex<DictationAccountSession?>(nil)
     private var session: DictationAccountSession? {
-        didSet {
-            let current = session
-            publishedSession.withLock { $0 = current }
-        }
+        get { sessionSnapshot.withLock { $0 } }
+        set { sessionSnapshot.withLock { $0 = newValue } }
     }
-    private nonisolated let publishedSession = Mutex<DictationAccountSession?>(nil)
     private var profile: DictationProfileState = .unverified
     private var profileRevision = UUID()
     private var accountObserver: AccountObservation?
@@ -82,7 +80,7 @@ public actor DictationLibraryStore {
         capacity = LibraryCapacity(limit: capacityBytes, used: try files.usedBytes())
     }
 
-    public nonisolated func accountSession() -> DictationAccountSession? { publishedSession.withLock { $0 } }
+    public nonisolated func accountSession() -> DictationAccountSession? { sessionSnapshot.withLock { $0 } }
     public func profileState() -> DictationProfileState { profile }
 
     public func accountEvents() -> AsyncStream<DictationAccountSession?> {
@@ -174,17 +172,17 @@ public actor DictationLibraryStore {
     }
 
     public func saveProfile(_ value: DictationProfile, session lease: DictationAccountSession) async throws {
-        try validate(lease)
+        try validateAccountSession(lease)
         let current = try await verifiedSession()
         guard current == lease else { throw DictationLibraryError.accountChanged }
         try await cloud.saveProfile(value)
-        try validate(lease)
+        try validateAccountSession(lease)
         profileRevision = UUID()
         _ = try await refresh()
     }
 
     public func updateDictionarySnapshot(_ terms: [String], session lease: DictationAccountSession) throws {
-        try validate(lease)
+        try validateAccountSession(lease)
         guard case .ready(let snapshot) = profile else { throw DictationLibraryError.profileUnavailable }
         var value = snapshot.profile
         value.dictionary = terms
@@ -194,7 +192,7 @@ public actor DictationLibraryStore {
     }
 
     public func restoreCachedProfile(session lease: DictationAccountSession) async throws -> Bool {
-        try validate(lease)
+        try validateAccountSession(lease)
         let url = files.partition(lease.accountIdentifier).appending(path: "profile.json")
         guard FileManager.default.fileExists(atPath: url.path) else { return false }
         let snapshot = try LibraryFiles.read(DictationProfileSnapshot.self, at: url)
@@ -232,7 +230,7 @@ public actor DictationLibraryStore {
 
     public func beginCapture(plan: DictationPlan) throws -> DictationCaptureWriter {
         guard plan.archiveEnabled else { throw DictationLibraryError.archiveDisabled }
-        if let lease = plan.accountSession { try validate(lease) }
+        if let lease = plan.accountSession { try validateAccountSession(lease) }
         try capacity.requireHeadroom(Self.captureHeadroomBytes)
         let capture = DictationCapture(formatVersion: 1, id: UUID(), account: plan.accountSession.map { DictationAccountStamp(accountIdentifier: $0.accountIdentifier, epoch: $0.epoch) }, source: source, startedAt: .now, sampleRate: nil, plan: plan, finishedAt: nil, interrupted: false, originalSHA256: nil, originalByteCount: nil)
         let writer = try DictationCaptureWriter(capture: capture, folder: files.folder(capture.id, account: capture.account?.accountIdentifier), capacity: capacity)
@@ -284,7 +282,7 @@ public actor DictationLibraryStore {
     }
 
     public func reconcileHeldCapture(id: UUID, session lease: DictationAccountSession) throws {
-        try validate(lease)
+        try validateAccountSession(lease)
         let folder = try captureFolder(id)
         var capture = try LibraryFiles.read(DictationCapture.self, at: folder.appending(path: "capture.json"))
         guard capture.account == nil else { throw DictationLibraryError.heldCapture(id) }
@@ -450,7 +448,7 @@ public actor DictationLibraryStore {
     }
 
     public func releasePublishedOriginals(finishedBefore cutoff: Date, session: DictationAccountSession) throws -> DictationReleaseReport {
-        try validate(session)
+        try validateAccountSession(session)
         var count = 0
         var bytes: Int64 = 0
         var retained = 0
@@ -490,13 +488,13 @@ public actor DictationLibraryStore {
             do { missing = try await cloud.missing(batch.flatMap(\.names).map { CKRecord.ID(recordName: $0, zoneID: DictationLibrarySchema.zone) }) }
             catch is CancellationError { throw CancellationError() }
             catch {
-                try validate(lease)
+                try validateAccountSession(lease)
                 if let oldest = batch.first?.item {
                     captureFailures[oldest.folder.resolvingSymlinksInPath().path] = "Could not confirm that iCloud has this uploaded recording, so its local original is kept: \(Self.libraryError(error).localizedDescription)"
                 }
                 return
             }
-            try validate(lease)
+            try validateAccountSession(lease)
             guard !receiptsReset, !publishAgain else { return }
             let missingNames = Set(missing.map(\.recordName))
             for (item, names) in batch {
@@ -513,7 +511,7 @@ public actor DictationLibraryStore {
     }
 
     @discardableResult public func reseedPublication(session: DictationAccountSession) throws -> Int {
-        try validate(session)
+        try validateAccountSession(session)
         if publishing { receiptsReset = true; publishAgain = true }
         var reset = 0
         for capture in try captures(account: session.accountIdentifier) {
@@ -536,7 +534,7 @@ public actor DictationLibraryStore {
             receiptsReset = false
             inventory = try publicationInventory()
             for index in inventory.indices {
-                try validate(lease)
+                try validateAccountSession(lease)
                 let item = inventory[index]
                 guard item.capture.account?.accountIdentifier == lease.accountIdentifier, item.capture.originalSHA256 != nil else { continue }
                 do {
@@ -547,7 +545,7 @@ public actor DictationLibraryStore {
                 catch is ReceiptsReset { break }
                 catch { captureFailures[item.folder.resolvingSymlinksInPath().path] = error.localizedDescription }
             }
-            try validate(lease)
+            try validateAccountSession(lease)
             try await reclaimPublishedOriginals(inventory, lease: lease)
         } while publishAgain
         return try status(inventory: inventory)
@@ -599,11 +597,11 @@ public actor DictationLibraryStore {
 
     private func publish(_ record: CKRecord, lease: DictationAccountSession, folder: URL, acknowledged: inout Set<String>) async throws {
         guard !acknowledged.contains(record.recordID.recordName) else { return }
-        try validate(lease)
+        try validateAccountSession(lease)
         guard try await cloud.accountIdentifier() == lease.accountIdentifier else { accountDidChange(); throw DictationLibraryError.accountChanged }
-        try validate(lease)
+        try validateAccountSession(lease)
         do { try await cloud.create(record) } catch { throw Self.libraryError(error) }
-        try validate(lease)
+        try validateAccountSession(lease)
         guard !receiptsReset else { throw ReceiptsReset() }
         acknowledged.insert(record.recordID.recordName)
         try capacity.write(acknowledged.sorted(), to: folder.appending(path: Self.acknowledgementFile))
@@ -612,13 +610,8 @@ public actor DictationLibraryStore {
     private func verifiedSession() async throws -> DictationAccountSession {
         guard let lease = session else { throw DictationLibraryError.accountUnavailable }
         guard try await cloud.accountIdentifier() == lease.accountIdentifier else { accountDidChange(); throw DictationLibraryError.accountChanged }
-        try validate(lease)
+        try validateAccountSession(lease)
         return lease
-    }
-
-    private func validate(_ lease: DictationAccountSession) throws {
-        try Task.checkCancellation()
-        guard session == lease, epoch == lease.epoch else { throw DictationLibraryError.accountChanged }
     }
 
     private func findCaptureFolder(_ id: UUID) throws -> URL? {

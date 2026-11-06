@@ -40,7 +40,7 @@ public struct DictationCapabilities: Sendable {
 }
 
 public struct DictationPlan: Codable, Equatable, Sendable {
-    var accountSession: DictationAccountSession?
+    public private(set) var accountSession: DictationAccountSession?
     public let context: DictationContext
     public let archiveEnabled: Bool
     public let preferredModel: String

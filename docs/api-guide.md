@@ -261,7 +261,9 @@ separate local directory per container. The library never chooses a container.
   per store and retries unresolved candidates on later calls.
   `accountEvents()` is the single owner of `CKAccountChanged`. `accountSession()`
   and `validateAccountSession(_:)` are synchronous and never wait for the
-  store's other work. `status().failures`
+  store's other work; `accountSession()` already returns a session before
+  `accountEvents()` delivers it. `DictationPlan.accountSession` is the session
+  a plan and its capture belong to; it is not encoded, so a decoded plan has none. `status().failures`
   exposes individual recovery/publication failures without blocking healthy captures.
   Profile edits and explicit releases require the editor's frozen account session.
   The containing app updates its local canonical dictionary through `updateDictionarySnapshot`;
