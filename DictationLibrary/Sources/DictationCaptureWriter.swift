@@ -126,20 +126,11 @@ public final class DictationCaptureWriter: Sendable {
             guard state.phase == .recording, state.failure == nil else { return }
             do {
                 guard state.format == buffer.format, let converter = state.converter, let journal = state.journal,
-                      let output = AVAudioPCMBuffer(pcmFormat: converter.outputFormat, frameCapacity: buffer.frameLength + 64) else {
+                      let output = AVAudioPCMBuffer(pcmFormat: converter.outputFormat, frameCapacity: buffer.frameLength) else {
                     throw DictationLibraryError.invalidConfiguration
                 }
-                nonisolated(unsafe) let input = buffer
-                nonisolated(unsafe) var supplied = false
-                var error: NSError?
-                let status = converter.convert(to: output, error: &error) { _, status in
-                    guard !supplied else { status.pointee = .noDataNow; return nil }
-                    supplied = true
-                    status.pointee = .haveData
-                    return input
-                }
-                if let error { throw error }
-                guard status != .error, let samples = output.int16ChannelData?[0] else { throw DictationLibraryError.invalidConfiguration }
+                try converter.convert(to: output, from: buffer)
+                guard let samples = output.int16ChannelData?[0] else { throw DictationLibraryError.invalidConfiguration }
                 let count = Int(output.frameLength) * MemoryLayout<Int16>.size
                 try capacity.reserve(Int64(count))
                 journal.append(Data(bytes: samples, count: count))
