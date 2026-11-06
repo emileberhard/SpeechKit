@@ -16,14 +16,10 @@ public enum DictationProfileState: Equatable, Sendable {
     case ready(DictationProfileSnapshot)
 }
 
-private final class AccountObservation: @unchecked Sendable {
-    private let token: any NSObjectProtocol
-
-    init(_ handler: @escaping @Sendable () -> Void) {
-        token = NotificationCenter.default.addObserver(forName: .CKAccountChanged, object: nil, queue: nil) { _ in handler() }
-    }
-
-    deinit { NotificationCenter.default.removeObserver(token) }
+private struct AccountChanged: NotificationCenter.AsyncMessage {
+    typealias Subject = CKContainer
+    static var name: Notification.Name { .CKAccountChanged }
+    static func makeMessage(_ notification: Notification) -> Self? { Self() }
 }
 
 public struct DictationCaptureFailure: Equatable, Sendable {
@@ -57,7 +53,7 @@ public actor DictationLibraryStore {
     }
     private var profile: DictationProfileState = .unverified
     private var profileRevision = UUID()
-    private var accountObserver: AccountObservation?
+    private var accountObserver: NotificationCenter.ObservationToken?
     private var observers: [UUID: AsyncStream<DictationAccountSession?>.Continuation] = [:]
     private var writers: [UUID: WeakWriter] = [:]
     private var publishing = false
@@ -97,8 +93,8 @@ public actor DictationLibraryStore {
 
     private func observeAccount() {
         guard accountObserver == nil else { return }
-        accountObserver = AccountObservation { [weak self] in
-            Task { await self?.accountNotification() }
+        accountObserver = NotificationCenter.default.addObserver(of: nil, for: AccountChanged.self) { [weak self] _ in
+            await self?.accountNotification()
         }
     }
 
