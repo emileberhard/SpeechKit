@@ -804,3 +804,14 @@ the hex SHA-256 of its leaf certificate; behind an HTTPS CONNECT proxy, also set
 `SPEECHKIT_RELAY_PROXY_PASSWORD` and `SPEECHKIT_RELAY_PROXY_CERT_SHA256`.
 
 The 8 MiB original chunk size is part of format version 1. Changing it requires a wire-format migration. Metadata fetch or dictionary validation failures remain visible and retain the previous token/cache; they never silently advance past potentially recoverable data.
+
+## Benchmarks
+
+Opt-in benchmarks time the append hot paths: capture conversion, recording
+journals, realtime input and streamed upload bodies. Each prints the median and
+minimum of 15 runs. Compare runs on the same machine before and after a change
+to audio buffer handling:
+
+```bash
+SPEECHKIT_BENCHMARK=1 swift test -c release -Xswiftc -enable-testing --filter AppendBenchmark
+```
