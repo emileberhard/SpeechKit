@@ -459,7 +459,9 @@ let writer = try await store.startRecording(owner: owner, sampleRate: dictation.
 // Audio tap, for each PCM16 chunk at dictation.sampleRate:
 //     writer.append(chunk)
 //     dictation.append(chunk)
-// Stop capture, then finish the writer as shown above, and:
+// Stop capture and call dictation.endInput() at once, so the provider starts
+// finalizing while the app releases its audio session. Then finish the writer
+// as shown above, and:
 let text: String
 do {
     text = try await dictation.finish()

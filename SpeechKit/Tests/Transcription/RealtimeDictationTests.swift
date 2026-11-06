@@ -19,6 +19,20 @@ struct RealtimeDictationTests {
         #expect(await session.disconnectCount == 1)
     }
 
+    @Test func endingInputCommitsBeforeAnyoneAwaitsTheTranscript() async throws {
+        let session = ScriptedRealtimeSession(connect: .immediately, commit: .finalizes("early"))
+        let dictation = RealtimeDictation(session: session)
+        chunks.forEach(dictation.append)
+
+        dictation.endInput()
+        await session.waitForCommit()
+        dictation.append(chunks[0])
+
+        #expect(try await dictation.finish() == "early")
+        #expect(await session.sentChunks == chunks)
+        #expect(await session.commitCount == 1)
+    }
+
     @Test func finalizationsBeforeTheFinalCommitDoNotEndTheDictation() async throws {
         let session = ScriptedRealtimeSession(connect: .immediately, commit: .finalizes("two"))
         let dictation = RealtimeDictation(session: session)

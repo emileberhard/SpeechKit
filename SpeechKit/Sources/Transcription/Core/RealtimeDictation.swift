@@ -29,8 +29,12 @@ public final class RealtimeDictation: Sendable {
         input.append(pcm16)
     }
 
-    public func finish() async throws -> String {
+    public func endInput() {
         input.finish()
+    }
+
+    public func finish() async throws -> String {
+        endInput()
         return try await withTaskCancellationHandler {
             try await transcription.value
         } onCancel: { [transcription] in
