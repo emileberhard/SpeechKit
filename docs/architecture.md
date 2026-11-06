@@ -51,6 +51,16 @@ excluding fixture construction. Against `d5e03d9`, audio reads fell from 132
 (69,653 bytes). These are application read counts, not kernel disk I/O or device
 CPU measurements. The optimized consumer uses the returned publication status.
 
+Every target builds with `NonisolatedNonsendingByDefault`, the semantics all
+current consumers already use for their own code. Nonisolated async APIs run
+on the caller's actor, so callers keep non-Sendable state without crossing an
+isolation boundary and avoid a hop for request setup and waiting. Work that
+grows with a payload stays off that actor through `@concurrent`: multipart and
+base64 request bodies, cleanup images, recording and capture files, and archive
+chunk reads. Keeping the old default would hop on every call; marking every
+function `@concurrent`, as the migration fix-its do, would keep the hop without
+documenting which work needs it.
+
 ## Build and release ownership
 
 The public package remains SwiftPM-only. Both products require Apple frameworks,

@@ -21,7 +21,7 @@ public struct DictationCleanupOutput: Sendable {
 public enum DictationCleanup {
     public static let model = "gemini-3.5-flash"
 
-    public static func clean(text: String, plan: DictationPlan, access: SpeechProviderAccess, context: DictationCleanupContext? = nil) async throws -> DictationCleanupOutput {
+    @concurrent public static func clean(text: String, plan: DictationPlan, access: SpeechProviderAccess, context: DictationCleanupContext? = nil) async throws -> DictationCleanupOutput {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, plan.context != .terminal, plan.cleanupEnabled else {
             return DictationCleanupOutput(text: text, kind: .providerOutput, model: plan.effectiveModel, contextWasUsed: false)
         }

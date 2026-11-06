@@ -24,7 +24,7 @@ public final class ElevenLabsTranscriptionProvider: TranscriptionProvider {
         self.session = session ?? SpeechKitURLSessionFactory.batchSession(for: configuration.access)
     }
 
-    public func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
+    @concurrent public func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
         let text = try await transcribeBatch(request)
         return TranscriptionResult(text: text, providerID: id)
     }

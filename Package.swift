@@ -1,6 +1,8 @@
 // swift-tools-version: 6.4
 import PackageDescription
 
+let swiftSettings: [SwiftSetting] = [.enableUpcomingFeature("NonisolatedNonsendingByDefault")]
+
 let package = Package(
     name: "SpeechKit",
     platforms: [
@@ -15,11 +17,12 @@ let package = Package(
         .library(name: "DictationLibrary", targets: ["DictationLibrary"])
     ],
     targets: [
-        .target(name: "DictationLibrary", dependencies: ["SpeechKit"], path: "DictationLibrary/Sources"),
-        .testTarget(name: "DictationLibraryTests", dependencies: ["DictationLibrary"], path: "DictationLibrary/Tests"),
+        .target(name: "DictationLibrary", dependencies: ["SpeechKit"], path: "DictationLibrary/Sources", swiftSettings: swiftSettings),
+        .testTarget(name: "DictationLibraryTests", dependencies: ["DictationLibrary"], path: "DictationLibrary/Tests", swiftSettings: swiftSettings),
         .target(
             name: "SpeechKit",
-            path: "SpeechKit/Sources"
+            path: "SpeechKit/Sources",
+            swiftSettings: swiftSettings
         ),
         .testTarget(
             name: "SpeechKitTests",
@@ -27,7 +30,8 @@ let package = Package(
             path: "SpeechKit/Tests",
             resources: [
                 .process("Transcription/Fixtures")
-            ]
+            ],
+            swiftSettings: swiftSettings
         )
     ]
 )

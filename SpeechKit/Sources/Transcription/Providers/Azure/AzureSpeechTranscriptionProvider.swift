@@ -12,7 +12,7 @@ public struct AzureSpeechTranscriptionProvider: ProgressiveTranscriptionProvider
         self.session = session ?? SpeechKitURLSessionFactory.batchSession(for: configuration.access)
     }
 
-    public func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
+    @concurrent public func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
         let options = ProgressiveTranscriptionRequest(
             languageHints: request.languageHints,
             customVocabulary: request.customVocabulary,

@@ -30,7 +30,7 @@ public final class OpenAITranscriptionProvider: TranscriptionProvider {
         self.session = session ?? SpeechKitURLSessionFactory.batchSession(for: configuration.access)
     }
 
-    public func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
+    @concurrent public func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
         let boundary = UUID().uuidString
 
         var multipart = MultipartFormDataBuilder(boundary: boundary)

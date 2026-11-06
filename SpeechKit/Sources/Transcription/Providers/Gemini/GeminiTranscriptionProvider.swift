@@ -30,7 +30,7 @@ public final class GeminiTranscriptionProvider: TranscriptionProvider {
         session = SpeechKitURLSessionFactory.batchSession(for: configuration.access)
     }
 
-    public func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
+    @concurrent public func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
         let prompt = transcriptionPrompt(for: request)
         let base64Audio = request.audio.data.base64EncodedString()
 

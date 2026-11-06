@@ -197,7 +197,7 @@ struct CloudKitLibraryCloud: LibraryCloud {
         }
     }
 
-    func originalChunk(_ id: CKRecord.ID) async throws -> Data {
+    @concurrent func originalChunk(_ id: CKRecord.ID) async throws -> Data {
         let record = try await database.record(for: id)
         guard record.recordType == DictationLibrarySchema.chunkRecordType,
               let asset = record[DictationLibrarySchema.originalAssetKey] as? CKAsset, let url = asset.fileURL else { throw DictationLibraryError.invalidRecord(id.recordName) }
