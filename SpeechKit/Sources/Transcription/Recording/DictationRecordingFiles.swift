@@ -1,5 +1,6 @@
 import Foundation
 import os
+import Synchronization
 
 enum DictationRecordingFormat {
     static let version = 1
@@ -54,15 +55,15 @@ struct DictationRecordingManifestOwner<Owner: Decodable>: Decodable {
 }
 
 enum DictationRecordingInventory {
-    private static let lock = OSAllocatedUnfairLock()
+    private static let lock = Mutex(())
 
-    static func withLock<Result: Sendable>(_ body: @Sendable () throws -> Result) rethrows -> Result {
-        try lock.withLock(body)
+    static func withLock<Result: Sendable>(_ body: () throws -> Result) rethrows -> Result {
+        try lock.withLock { _ in try body() }
     }
 }
 
 enum OpenDictationRecordings {
-    private static let ids = OSAllocatedUnfairLock<Set<UUID>>(initialState: [])
+    private static let ids = Mutex<Set<UUID>>([])
 
     static func insert(_ id: UUID) {
         ids.withLock { _ = $0.insert(id) }

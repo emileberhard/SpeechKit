@@ -1,5 +1,6 @@
 import Foundation
 import OSLog
+import Synchronization
 
 actor RealtimeWebSocketConnection<Event: Sendable> {
     typealias EventDecoder = @Sendable (Data) throws -> Event?
@@ -333,28 +334,18 @@ actor RealtimeWebSocketConnection<Event: Sendable> {
     }
 }
 
-private final class OneShotContinuation: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<Void, Error>?
+private final class OneShotContinuation: Sendable {
+    private let continuation: Mutex<CheckedContinuation<Void, Error>?>
 
     init(_ continuation: CheckedContinuation<Void, Error>) {
-        self.continuation = continuation
+        self.continuation = Mutex(continuation)
     }
 
     func resume() {
-        takeContinuation()?.resume()
+        continuation.withLock { $0.take() }?.resume()
     }
 
     func resume(throwing error: Error) {
-        takeContinuation()?.resume(throwing: error)
-    }
-
-    private func takeContinuation() -> CheckedContinuation<Void, Error>? {
-        lock.lock()
-        defer { lock.unlock() }
-
-        let current = continuation
-        continuation = nil
-        return current
+        continuation.withLock { $0.take() }?.resume(throwing: error)
     }
 }

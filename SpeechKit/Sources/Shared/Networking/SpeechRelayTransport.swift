@@ -1,5 +1,5 @@
 import Foundation
-import os
+import Synchronization
 
 public final class SpeechRelayTransport: Sendable, Equatable {
     enum SessionKind: Sendable {
@@ -10,7 +10,7 @@ public final class SpeechRelayTransport: Sendable, Equatable {
 
     private let configure: @Sendable (URLSessionConfiguration) -> Void
     private let trust: ServerTrust
-    private let sessions = OSAllocatedUnfairLock(initialState: [SessionKind: URLSession]())
+    private let sessions = Mutex<[SessionKind: URLSession]>([:])
 
     public init(
         configure: @escaping @Sendable (URLSessionConfiguration) -> Void,

@@ -1,5 +1,5 @@
 import Foundation
-import os
+import Synchronization
 
 public final class DictationRecordingWriter<Owner: Codable & Sendable>: Sendable {
     private enum Phase: Sendable {
@@ -18,7 +18,7 @@ public final class DictationRecordingWriter<Owner: Codable & Sendable>: Sendable
 
     private let manifest: DictationRecordingManifest<Owner>
     private let folder: URL
-    private let state: OSAllocatedUnfairLock<State>
+    private let state: Mutex<State>
 
     package static func start(
         manifest: DictationRecordingManifest<Owner>,
@@ -55,7 +55,7 @@ public final class DictationRecordingWriter<Owner: Codable & Sendable>: Sendable
     private init(manifest: DictationRecordingManifest<Owner>, folder: URL, descriptor: Int32) {
         self.manifest = manifest
         self.folder = folder
-        self.state = OSAllocatedUnfairLock(initialState: State(phase: .recording(descriptor: descriptor)))
+        self.state = Mutex(State(phase: .recording(descriptor: descriptor)))
     }
 
     deinit {

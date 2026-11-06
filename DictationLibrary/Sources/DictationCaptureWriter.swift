@@ -1,8 +1,8 @@
 import AudioToolbox
 import AVFAudio
 import Foundation
-import os
 import SpeechKit
+import Synchronization
 
 public struct IncompleteLibraryCapture: Error, Sendable {
     public let capture: DictationCapture
@@ -10,12 +10,12 @@ public struct IncompleteLibraryCapture: Error, Sendable {
 }
 
 final class LibraryCapacity: Sendable {
-    private let used: OSAllocatedUnfairLock<Int64>
+    private let used: Mutex<Int64>
     let limit: Int64
 
     init(limit: Int64, used: Int64) {
         self.limit = limit
-        self.used = OSAllocatedUnfairLock(initialState: used)
+        self.used = Mutex(used)
     }
 
     var usedBytes: Int64 { used.withLock { $0 } }
@@ -87,7 +87,7 @@ public final class DictationCaptureWriter: Sendable {
     public let originalURL: URL
     private let folder: URL
     private let capacity: LibraryCapacity
-    private let state: OSAllocatedUnfairLock<State>
+    private let state: Mutex<State>
 
     init(capture: DictationCapture, folder: URL, capacity: LibraryCapacity) throws {
         id = capture.id
@@ -95,12 +95,12 @@ public final class DictationCaptureWriter: Sendable {
         originalURL = folder.appending(path: "original.caf")
         self.folder = folder
         self.capacity = capacity
-        state = OSAllocatedUnfairLock(uncheckedState: State(capture: capture))
+        state = Mutex(State(capture: capture))
         try capacity.write(capture, to: folder.appending(path: "capture.json"))
     }
 
     public func configure(format: AVAudioFormat) throws {
-        try state.withLockUnchecked { state in
+        try state.withLock { state in
             guard state.phase == .recording, state.journal == nil else { throw DictationLibraryError.recordingFinished }
             guard format.sampleRate > 0, format.sampleRate <= 192_000,
                   let output = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: format.sampleRate, channels: 1, interleaved: true),
@@ -122,7 +122,7 @@ public final class DictationCaptureWriter: Sendable {
 
     public func append(_ buffer: AVAudioPCMBuffer) {
         guard buffer.frameLength > 0 else { return }
-        state.withLockUnchecked { state in
+        state.withLock { state in
             guard state.phase == .recording, state.failure == nil else { return }
             do {
                 guard state.format == buffer.format, let converter = state.converter, let journal = state.journal,
@@ -148,15 +148,15 @@ public final class DictationCaptureWriter: Sendable {
         }
     }
 
-    var isFinished: Bool { state.withLockUnchecked { $0.phase == .finished } }
+    var isFinished: Bool { state.withLock { $0.phase == .finished } }
 
     @concurrent public func finish() async throws -> DictationCapture {
-        var (capture, journal, count, metadataBytes, failure) = try state.withLockUnchecked { state in
+        var (capture, journal, count, metadataBytes, failure) = try state.withLock { state in
             guard state.phase == .recording else { throw DictationLibraryError.recordingFinished }
             state.phase = .finishing
             return (state.capture, state.journal, state.byteCount, state.journalMetadataBytes, state.failure)
         }
-        defer { state.withLockUnchecked { $0.phase = .finished } }
+        defer { state.withLock { $0.phase = .finished } }
         guard let journal, count > 0, let rate = capture.sampleRate else {
             if let journal { try await journal.discard(); capacity.release(metadataBytes) }
             throw failure ?? DictationLibraryError.noAudio

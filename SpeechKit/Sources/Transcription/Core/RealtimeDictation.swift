@@ -1,5 +1,5 @@
 import Foundation
-import os
+import Synchronization
 
 public final class RealtimeDictation: Sendable {
     public let sampleRate: Int
@@ -106,7 +106,7 @@ final class RealtimeDictationInput: Sendable {
     private let signal: AsyncStream<RealtimeDictationSignal>.Continuation
     private let bytesPerSecond: Int
     private let maximumPendingByteCount: Int
-    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let state = Mutex(State())
 
     init(bytesPerSecond: Int, maximumPendingByteCount: Int, signal: AsyncStream<RealtimeDictationSignal>.Continuation) {
         (audio, audioContinuation) = AsyncStream<Data>.makeStream()
@@ -190,7 +190,7 @@ final class RealtimeDictationRun: Sendable {
     private let session: any RealtimeTranscriptionSession
     private let input: RealtimeDictationInput
     private let signal: AsyncStream<RealtimeDictationSignal>.Continuation
-    private let connection = OSAllocatedUnfairLock(initialState: Connection.connecting)
+    private let connection = Mutex(Connection.connecting)
 
     init(
         session: any RealtimeTranscriptionSession,

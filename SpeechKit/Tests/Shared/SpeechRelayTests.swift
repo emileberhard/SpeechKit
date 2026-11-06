@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import Network
 import OSLog
+import Synchronization
 import Testing
 @testable import SpeechKit
 
@@ -432,28 +433,26 @@ private final class RelayMockURLProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
-private final class RelayHandlerStore: @unchecked Sendable {
-    private let lock = NSLock()
-    private var handler: RelayMockURLProtocol.Handler?
+private final class RelayHandlerStore: Sendable {
+    private let handler = Mutex<RelayMockURLProtocol.Handler?>(nil)
 
     func set(_ handler: RelayMockURLProtocol.Handler?) {
-        lock.withLock { self.handler = handler }
+        self.handler.withLock { $0 = handler }
     }
 
     func get() -> RelayMockURLProtocol.Handler? {
-        lock.withLock { handler }
+        handler.withLock { $0 }
     }
 }
 
-private final class RelayRequestCapture: @unchecked Sendable {
-    private let lock = NSLock()
-    private var storage: [URLRequest] = []
+private final class RelayRequestCapture: Sendable {
+    private let storage = Mutex<[URLRequest]>([])
 
     var requests: [URLRequest] {
-        lock.withLock { storage }
+        storage.withLock { $0 }
     }
 
     func append(_ request: URLRequest) {
-        lock.withLock { storage.append(request) }
+        storage.withLock { $0.append(request) }
     }
 }

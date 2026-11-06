@@ -1,6 +1,6 @@
 import AVFAudio
 import Foundation
-import os
+import Synchronization
 import Testing
 @testable import SpeechKit
 
@@ -44,7 +44,7 @@ struct DictationRecordingStoreTests {
     }
 
     private final class DecodeGate: Sendable {
-        private let state = OSAllocatedUnfairLock(initialState: (armed: false, entered: false))
+        private let state = Mutex((armed: false, entered: false))
         private let release = DispatchSemaphore(value: 0)
 
         var hasEntered: Bool { state.withLock { $0.entered } }

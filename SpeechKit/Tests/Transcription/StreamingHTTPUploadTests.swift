@@ -1,6 +1,5 @@
 import Foundation
 import Testing
-import os
 @testable import SpeechKit
 
 @Suite(.timeLimit(.minutes(1)))
@@ -46,14 +45,14 @@ struct StreamingHTTPUploadTests {
         let upload = try makeUpload(path: "pending", start: false)
         let session = URLSession(configuration: .ephemeral)
         let task = session.dataTask(with: URL(string: "https://example.test")!)
-        let supplied = OSAllocatedUnfairLock(uncheckedState: Optional<InputStream>.none)
+        nonisolated(unsafe) var supplied: InputStream?
         upload.urlSession(session, task: task, needNewBodyStream: { input in
             #expect(input != nil)
-            supplied.withLockUnchecked { $0 = input }
+            supplied = input
         })
         upload.urlSession(session, task: task, needNewBodyStream: { #expect($0 == nil) })
         #expect(throws: ProgressiveTranscriptionError.bodyCannotBeReplayed) { try upload.finish() }
-        supplied.withLockUnchecked { $0?.close() }
+        supplied?.close()
         session.invalidateAndCancel()
     }
 

@@ -1,5 +1,5 @@
 import Foundation
-import os
+import Synchronization
 
 /// A bounded producer queue feeding a native bound stream. Foundation stream
 /// operations and callbacks stay on one dedicated run loop, never an audio
@@ -15,7 +15,7 @@ final class StreamingHTTPBody: NSObject, StreamDelegate, @unchecked Sendable {
         var runLoop: CFRunLoop?
     }
 
-    private let state = OSAllocatedUnfairLock(uncheckedState: State())
+    private let state = Mutex(State())
     private let capacity: Int
     private let output: OutputStream
     private let onFailure: @Sendable (any Error) -> Void
@@ -39,7 +39,7 @@ final class StreamingHTTPBody: NSObject, StreamDelegate, @unchecked Sendable {
     }
 
     func append(_ data: Data) throws {
-        let runLoop = try state.withLockUnchecked { state -> CFRunLoop? in
+        let runLoop = try state.withLock { state -> CFRunLoop? in
             guard !state.isCancelled else { throw CancellationError() }
             guard !state.isFinishing else { throw ProgressiveTranscriptionError.alreadyFinished }
             guard data.count <= capacity - state.bufferedBytes else {
@@ -55,7 +55,7 @@ final class StreamingHTTPBody: NSObject, StreamDelegate, @unchecked Sendable {
     }
 
     func finish(suffix: Data) throws {
-        let runLoop = try state.withLockUnchecked { state -> CFRunLoop? in
+        let runLoop = try state.withLock { state -> CFRunLoop? in
             guard !state.isCancelled else { throw CancellationError() }
             guard !state.isFinishing else { throw ProgressiveTranscriptionError.alreadyFinished }
             guard suffix.count <= capacity - state.bufferedBytes else {
@@ -70,7 +70,7 @@ final class StreamingHTTPBody: NSObject, StreamDelegate, @unchecked Sendable {
     }
 
     func cancel() {
-        let runLoop = state.withLockUnchecked { state in
+        let runLoop = state.withLock { state in
             state.isCancelled = true
             state.chunks.removeAll()
             return state.runLoop
@@ -79,7 +79,7 @@ final class StreamingHTTPBody: NSObject, StreamDelegate, @unchecked Sendable {
     }
 
     func start() {
-        let shouldStart = state.withLockUnchecked { state in
+        let shouldStart = state.withLock { state in
             guard !state.hasStarted else { return false }
             state.hasStarted = true
             return true
@@ -98,16 +98,15 @@ final class StreamingHTTPBody: NSObject, StreamDelegate, @unchecked Sendable {
     }
 
     private func run() {
-        let runLoop = CFRunLoopGetCurrent()!
         output.delegate = self
         output.schedule(in: .current, forMode: .default)
         output.open()
-        state.withLockUnchecked { $0.runLoop = runLoop }
+        state.withLock { $0.runLoop = CFRunLoopGetCurrent() }
         drain()
         if !isClosed { CFRunLoopRun() }
         output.remove(from: .current, forMode: .default)
         output.delegate = nil
-        state.withLockUnchecked {
+        state.withLock {
             $0.runLoop = nil
             $0.chunks.removeAll()
             $0.bufferedBytes = 0
@@ -130,7 +129,7 @@ final class StreamingHTTPBody: NSObject, StreamDelegate, @unchecked Sendable {
     private func drain() {
         guard !isClosed else { return }
         while true {
-            let action = state.withLockUnchecked { state -> DrainAction in
+            let action = state.withLock { state -> DrainAction in
                 if state.isCancelled { return .cancelled }
                 if pendingOffset == pending.count {
                     pending = state.chunks.isEmpty ? Data() : state.chunks.removeFirst()
@@ -162,13 +161,13 @@ final class StreamingHTTPBody: NSObject, StreamDelegate, @unchecked Sendable {
                 return
             }
             pendingOffset += written
-            state.withLockUnchecked { $0.bufferedBytes -= written }
+            state.withLock { $0.bufferedBytes -= written }
         }
     }
 
     private func close() {
         isClosed = true
-        state.withLockUnchecked { $0.runLoop = nil }
+        state.withLock { $0.runLoop = nil }
         output.close()
         pending = Data()
         CFRunLoopStop(CFRunLoopGetCurrent())

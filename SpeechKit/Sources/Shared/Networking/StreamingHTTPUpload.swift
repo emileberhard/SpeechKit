@@ -1,5 +1,5 @@
 import Foundation
-import os
+import Synchronization
 
 /// One non-replayable HTTP upload. Provider wire formats stay with adapters.
 final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
@@ -9,7 +9,7 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
     }
 
     private struct State {
-        var input: InputStream?
+        nonisolated(unsafe) var input: InputStream?
         var body: StreamingHTTPBody?
         var task: URLSessionUploadTask?
         var session: URLSession?
@@ -20,7 +20,7 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
         var waiter: CheckedContinuation<Response, any Error>?
     }
 
-    private let state = OSAllocatedUnfairLock(uncheckedState: State())
+    private let state = Mutex(State())
     private let suffix: Data
     private let failure: @Sendable (HTTPURLResponse) -> any Error
     private let maximumResponseBytes: Int
@@ -57,12 +57,12 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
             output: output,
             capacity: bufferCapacity,
             onFailure: { [weak self] error in self?.complete(.failure(error)) },
-            onClose: { [weak self] in self?.state.withLockUnchecked { $0.bodyClosed = true } }
+            onClose: { [weak self] in self?.state.withLock { $0.bodyClosed = true } }
         )
         try body.append(prefix)
         let session = URLSession(configuration: transport?.prepared(configuration) ?? configuration, delegate: self, delegateQueue: nil)
         let task = session.uploadTask(withStreamedRequest: request)
-        state.withLockUnchecked {
+        state.withLock {
             $0.input = input
             $0.body = body
             $0.session = session
@@ -71,7 +71,7 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
     }
 
     func start() {
-        let task = state.withLockUnchecked { state -> URLSessionUploadTask? in
+        let task = state.withLock { state -> URLSessionUploadTask? in
             guard state.result == nil, !state.hasStarted else { return nil }
             state.hasStarted = true
             return state.task
@@ -100,7 +100,7 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
     }
 
     private func activeBody() throws -> StreamingHTTPBody {
-        try state.withLockUnchecked {
+        try state.withLock {
             if let result = $0.result {
                 _ = try result.get()
                 throw ProgressiveTranscriptionError.alreadyFinished
@@ -113,7 +113,7 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
         try await withTaskCancellationHandler {
             try Task.checkCancellation()
             return try await withCheckedThrowingContinuation { continuation in
-                let result = state.withLockUnchecked { state -> Result<Response, any Error>? in
+                let result = state.withLock { state -> Result<Response, any Error>? in
                     if let result = state.result { return result }
                     guard state.waiter == nil else {
                         return .failure(ProgressiveTranscriptionError.alreadyFinished)
@@ -131,7 +131,7 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
     func cancel() { complete(.failure(CancellationError())) }
 
     private func complete(_ result: Result<Response, any Error>) {
-        let cleanup = state.withLockUnchecked { state -> (
+        let cleanup = state.withLock { state -> (
             CheckedContinuation<Response, any Error>?, StreamingHTTPBody?, URLSession?
         )? in
             guard state.result == nil else { return nil }
@@ -173,7 +173,7 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
         task: URLSessionTask,
         needNewBodyStream completionHandler: @escaping @Sendable (InputStream?) -> Void
     ) {
-        let pair = state.withLockUnchecked { state -> (InputStream?, StreamingHTTPBody?) in
+        let pair = state.withLock { state -> (InputStream?, StreamingHTTPBody?) in
             guard state.result == nil else { return (nil, nil) }
             let input = state.input
             state.input = nil
@@ -189,7 +189,7 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        let tooLarge = state.withLockUnchecked { state in
+        let tooLarge = state.withLock { state in
             guard state.result == nil else { return false }
             guard data.count <= maximumResponseBytes - state.data.count else { return true }
             state.data.append(data)
@@ -222,7 +222,7 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
             complete(.failure(failure(response)))
             return
         }
-        let snapshot = state.withLockUnchecked { ($0.data, $0.bodyClosed) }
+        let snapshot = state.withLock { ($0.data, $0.bodyClosed) }
         if !snapshot.1 {
             complete(.failure(ProgressiveTranscriptionError.incompleteUpload))
         } else {

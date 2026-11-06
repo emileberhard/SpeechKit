@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import SpeechKit
 
@@ -262,28 +263,26 @@ private final class GeminiTranscribeMockURLProtocol: URLProtocol, @unchecked Sen
     override func stopLoading() {}
 }
 
-private final class GeminiTranscribeHandlerStore: @unchecked Sendable {
-    private let lock = NSLock()
-    private var handler: GeminiTranscribeMockURLProtocol.Handler?
+private final class GeminiTranscribeHandlerStore: Sendable {
+    private let handler = Mutex<GeminiTranscribeMockURLProtocol.Handler?>(nil)
 
     func set(_ handler: GeminiTranscribeMockURLProtocol.Handler?) {
-        lock.withLock { self.handler = handler }
+        self.handler.withLock { $0 = handler }
     }
 
     func get() -> GeminiTranscribeMockURLProtocol.Handler? {
-        lock.withLock { handler }
+        handler.withLock { $0 }
     }
 }
 
-private final class GeminiRequestCapture: @unchecked Sendable {
-    private let lock = NSLock()
-    private var storage: [URLRequest] = []
+private final class GeminiRequestCapture: Sendable {
+    private let storage = Mutex<[URLRequest]>([])
 
     var requests: [URLRequest] {
-        lock.withLock { storage }
+        storage.withLock { $0 }
     }
 
     func append(_ request: URLRequest) {
-        lock.withLock { storage.append(request) }
+        storage.withLock { $0.append(request) }
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import SpeechKit
 
@@ -151,28 +152,26 @@ private final class RouterMockURLProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
-private final class RouterHandlerStore: @unchecked Sendable {
-    private let lock = NSLock()
-    private var handler: RouterMockURLProtocol.Handler?
+private final class RouterHandlerStore: Sendable {
+    private let handler = Mutex<RouterMockURLProtocol.Handler?>(nil)
 
     func set(_ handler: RouterMockURLProtocol.Handler?) {
-        lock.withLock { self.handler = handler }
+        self.handler.withLock { $0 = handler }
     }
 
     func get() -> RouterMockURLProtocol.Handler? {
-        lock.withLock { handler }
+        handler.withLock { $0 }
     }
 }
 
-private final class RouterRequestCapture: @unchecked Sendable {
-    private let lock = NSLock()
-    private var storage: [URLRequest] = []
+private final class RouterRequestCapture: Sendable {
+    private let storage = Mutex<[URLRequest]>([])
 
     var requests: [URLRequest] {
-        lock.withLock { storage }
+        storage.withLock { $0 }
     }
 
     func append(_ request: URLRequest) {
-        lock.withLock { storage.append(request) }
+        storage.withLock { $0.append(request) }
     }
 }
