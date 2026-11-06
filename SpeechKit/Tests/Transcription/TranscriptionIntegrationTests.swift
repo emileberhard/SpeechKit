@@ -55,7 +55,7 @@ struct TranscriptionIntegrationTests {
         let provider = AssemblyAITranscriptionProvider(
             configuration: try AssemblyAIProviderConfiguration(
                 access: IntegrationAccess.provider("assemblyai"),
-                pollIntervalSeconds: 1.0
+                pollInterval: .seconds(1)
             )
         )
 

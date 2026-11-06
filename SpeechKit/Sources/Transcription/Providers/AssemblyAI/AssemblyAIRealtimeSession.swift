@@ -32,7 +32,7 @@ public actor AssemblyAIRealtimeSession {
             alreadyConnectedError: AssemblyAIRealtimeSessionError.alreadyConnected,
             notConnectedError: AssemblyAIRealtimeSessionError.notConnected,
             invalidMessageError: { AssemblyAIRealtimeSessionError.invalidMessage($0) },
-            pingIntervalNanoseconds: nil
+            pingInterval: nil
         )
     }
 

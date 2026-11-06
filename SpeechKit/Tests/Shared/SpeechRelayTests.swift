@@ -329,7 +329,7 @@ struct SpeechRelayTests {
             alreadyConnectedError: SpeechKitError.invalidResponse,
             notConnectedError: SpeechKitError.invalidResponse,
             invalidMessageError: { SpeechKitError.providerFailure($0) },
-            pingIntervalNanoseconds: nil
+            pingInterval: nil
         )
         let stream = try await connection.connect(request: URLRequest(url: URL(string: "ws://127.0.0.1:\(port)/")!))
         for try await _ in stream {}

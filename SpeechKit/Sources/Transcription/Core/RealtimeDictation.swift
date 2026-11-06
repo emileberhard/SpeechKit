@@ -172,8 +172,7 @@ final class RealtimeDictationInput: Sendable {
     }
 
     private static func byteCount(of duration: Duration, bytesPerSecond: Int) -> Int {
-        let (seconds, attoseconds) = duration.components
-        return Int(seconds) * bytesPerSecond + Int(Double(attoseconds) / 1e18 * Double(bytesPerSecond))
+        Int(duration.attoseconds * Int128(bytesPerSecond) / 1_000_000_000_000_000_000)
     }
 
     func stop() {

@@ -586,7 +586,7 @@ part of the public API.
 
 - `OpenAIProviderConfiguration(access:model:)`
 - `AzureSpeechProviderConfiguration(access:model:apiVersion:modelOptions:diarization:)`
-- `AssemblyAIProviderConfiguration(access:pollIntervalSeconds:speechModels:)`
+- `AssemblyAIProviderConfiguration(access:pollInterval:speechModels:)`
 - `AssemblyAIRealtimeSessionConfiguration(access:modelID:keyterms:languageHints:prompt:mode:)`
 - `ElevenLabsProviderConfiguration(access:)`
 - `GeminiProviderConfiguration(access:model:)`

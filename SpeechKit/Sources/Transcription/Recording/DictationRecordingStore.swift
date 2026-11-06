@@ -83,7 +83,7 @@ public struct DictationRecordingStore<Owner: Codable & Sendable>: Sendable {
         for (id, folder) in inventory.withoutAudio {
             RecordingFileSystem.removeAsHousekeeping(folder, id: id)
         }
-        let oldestRetainedStart = Date().addingTimeInterval(-retention.maximumAge.timeInterval)
+        let oldestRetainedStart = Date().addingTimeInterval(-(retention.maximumAge / .seconds(1)))
         var retained: [SavedRecording] = []
         for recording in inventory.saved {
             guard recording.startedAt >= oldestRetainedStart else {
@@ -169,11 +169,5 @@ public struct DictationRecordingStore<Owner: Codable & Sendable>: Sendable {
             guard RecordingFileSystem.isMissing(error) else { throw error }
             return nil
         }
-    }
-}
-
-private extension Duration {
-    var timeInterval: TimeInterval {
-        Double(components.seconds) + Double(components.attoseconds) / 1e18
     }
 }

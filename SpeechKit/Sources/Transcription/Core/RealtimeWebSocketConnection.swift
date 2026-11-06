@@ -18,7 +18,7 @@ actor RealtimeWebSocketConnection<Event: Sendable> {
     private let alreadyConnectedError: any Error & Sendable
     private let notConnectedError: any Error & Sendable
     private let invalidMessageError: InvalidMessageErrorBuilder
-    private let pingIntervalNanoseconds: UInt64?
+    private let pingInterval: Duration?
 
     private var webSocketTask: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
@@ -40,7 +40,7 @@ actor RealtimeWebSocketConnection<Event: Sendable> {
         alreadyConnectedError: any Error & Sendable,
         notConnectedError: any Error & Sendable,
         invalidMessageError: @escaping InvalidMessageErrorBuilder,
-        pingIntervalNanoseconds: UInt64? = 20_000_000_000
+        pingInterval: Duration? = .seconds(20)
     ) {
         self.providerName = providerName
         self.logger = logger
@@ -52,7 +52,7 @@ actor RealtimeWebSocketConnection<Event: Sendable> {
         self.alreadyConnectedError = alreadyConnectedError
         self.notConnectedError = notConnectedError
         self.invalidMessageError = invalidMessageError
-        self.pingIntervalNanoseconds = pingIntervalNanoseconds
+        self.pingInterval = pingInterval
     }
 
     func connect(request: URLRequest) throws -> AsyncThrowingStream<Event, Error> {
@@ -172,12 +172,12 @@ actor RealtimeWebSocketConnection<Event: Sendable> {
     private func startPingLoop(for task: URLSessionWebSocketTask) {
         pingTask?.cancel()
 
-        guard let pingIntervalNanoseconds else { return }
+        guard let pingInterval else { return }
 
         pingTask = Task { [weak self] in
             while !Task.isCancelled {
                 do {
-                    try await Task.sleep(nanoseconds: pingIntervalNanoseconds)
+                    try await Task.sleep(for: pingInterval)
                     try Task.checkCancellation()
                     try await Self.sendPing(on: task)
                 } catch is CancellationError {

@@ -4,23 +4,23 @@ public struct AssemblyAIProviderConfiguration: Sendable {
     public static let defaultSpeechModels = ["universal-3-5-pro", "universal-2"]
 
     public let access: SpeechProviderAccess
-    public let pollIntervalSeconds: Double
+    public let pollInterval: Duration
     public let speechModels: [String]
 
     public init(
         access: SpeechProviderAccess,
-        pollIntervalSeconds: Double,
+        pollInterval: Duration,
         speechModels: [String] = Self.defaultSpeechModels
     ) throws {
-        guard pollIntervalSeconds > 0 else {
-            throw SpeechKitError.invalidConfiguration("pollIntervalSeconds must be > 0")
+        guard pollInterval > .zero else {
+            throw SpeechKitError.invalidConfiguration("pollInterval must be positive")
         }
         guard !speechModels.isEmpty, speechModels.allSatisfy({ !$0.isEmpty }) else {
             throw SpeechKitError.invalidConfiguration("AssemblyAI speech models are required")
         }
 
         self.access = access
-        self.pollIntervalSeconds = pollIntervalSeconds
+        self.pollInterval = pollInterval
         self.speechModels = speechModels
     }
 }
@@ -147,8 +147,7 @@ public final class AssemblyAITranscriptionProvider: TranscriptionProvider {
                 throw SpeechKitError.providerFailure(decoded.error ?? "AssemblyAI transcription failed")
 
             default:
-                let nanos = UInt64(configuration.pollIntervalSeconds * 1_000_000_000)
-                try await Task.sleep(nanoseconds: nanos)
+                try await Task.sleep(for: configuration.pollInterval)
             }
         }
     }

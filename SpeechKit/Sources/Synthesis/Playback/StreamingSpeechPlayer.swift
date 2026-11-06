@@ -122,7 +122,7 @@ private extension StreamingSpeechPlayer {
                     playbackID: playbackID,
                     buffering: buffering,
                     receivedAudioDuration: receivedAudioDuration,
-                    deliveryDuration: firstChunkAt?.duration(to: clock.now).seconds ?? 0,
+                    deliveryDuration: firstChunkAt.map { $0.duration(to: clock.now) / .seconds(1) } ?? 0,
                     prepareForPlayback: prepareForPlayback
                 ), !didNotifyPlaybackStarted {
                     didNotifyPlaybackStarted = true
@@ -148,7 +148,7 @@ private extension StreamingSpeechPlayer {
                 playbackID: playbackID,
                 buffering: buffering,
                 receivedAudioDuration: receivedAudioDuration,
-                deliveryDuration: firstChunkAt?.duration(to: clock.now).seconds ?? 0,
+                deliveryDuration: firstChunkAt.map { $0.duration(to: clock.now) / .seconds(1) } ?? 0,
                 prepareForPlayback: prepareForPlayback
             ), !didNotifyPlaybackStarted {
                 didNotifyPlaybackStarted = true
@@ -487,16 +487,9 @@ struct SpeechStreamBufferingDecision {
             return deliveryRate >= sustainableDeliveryRate
                 && queuedAudioDuration >= minimumBufferDuration
         case .streaming(let minimumBufferedDuration):
-            return queuedAudioDuration >= minimumBufferedDuration.seconds
+            return queuedAudioDuration >= minimumBufferedDuration / .seconds(1)
         case .complete:
             return false
         }
-    }
-}
-
-private extension Duration {
-    var seconds: Double {
-        let components = self.components
-        return Double(components.seconds) + Double(components.attoseconds) / 1e18
     }
 }

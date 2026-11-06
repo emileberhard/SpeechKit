@@ -6,7 +6,7 @@ struct AssemblyAIRequestTests {
     @Test func acceptsServerSelectedCurrentModelPriority() throws {
         let configuration = try AssemblyAIProviderConfiguration(
             access: .testRouter(),
-            pollIntervalSeconds: 0.1,
+            pollInterval: .milliseconds(100),
             speechModels: ["universal-3-5-pro"]
         )
 
