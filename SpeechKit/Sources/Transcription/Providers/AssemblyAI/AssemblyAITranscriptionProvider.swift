@@ -60,7 +60,7 @@ public final class AssemblyAITranscriptionProvider: TranscriptionProvider {
     }
 
     private func uploadAudio(_ data: Data) async throws -> String {
-        var urlRequest = try authorizedRequest(url: baseURL.appendingPathComponent("upload"))
+        var urlRequest = try authorizedRequest(url: baseURL.appending(path: "upload"))
         urlRequest.httpMethod = "POST"
         urlRequest.httpBody = data
 
@@ -80,7 +80,7 @@ public final class AssemblyAITranscriptionProvider: TranscriptionProvider {
     }
 
     private func submitTranscription(uploadURL: String, request: TranscriptionRequest) async throws -> String {
-        var urlRequest = try authorizedRequest(url: baseURL.appendingPathComponent("transcript"))
+        var urlRequest = try authorizedRequest(url: baseURL.appending(path: "transcript"))
         urlRequest.httpMethod = "POST"
         urlRequest.addValue("application/json", forHTTPHeaderField: "Content-Type")
 
@@ -119,7 +119,7 @@ public final class AssemblyAITranscriptionProvider: TranscriptionProvider {
     }
 
     private func pollForCompletion(transcriptID: String) async throws -> String {
-        var urlRequest = try authorizedRequest(url: baseURL.appendingPathComponent("transcript/\(transcriptID)"))
+        var urlRequest = try authorizedRequest(url: baseURL.appending(path: "transcript/\(transcriptID)"))
         urlRequest.httpMethod = "GET"
 
         while true {
