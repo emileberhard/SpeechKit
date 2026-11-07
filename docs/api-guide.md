@@ -817,3 +817,12 @@ to audio buffer handling:
 ```bash
 SPEECHKIT_BENCHMARK=1 swift test -c release -Xswiftc -enable-testing --filter AppendBenchmark
 ```
+
+The publication benchmark seeds 2,000 published captures and measures a
+reopened store's first use and a publication pass after one dictation, each
+with the longest wait of a concurrent `profileState()` call. Run it after
+changes to the library store's scheduling or file access:
+
+```bash
+SPEECHKIT_BENCHMARK=1 swift test -c release -Xswiftc -enable-testing --filter PublicationBenchmark
+```
