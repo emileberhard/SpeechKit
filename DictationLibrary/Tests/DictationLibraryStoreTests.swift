@@ -660,6 +660,23 @@ import Testing
         #expect(try await reopened.publishPending().failures.isEmpty)
     }
 
+    @Test func aRecoveryFailureEndsWhenAdoptionMovesTheFolder() async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = FakeCloud(profile: TestSupport.profile)
+        let store = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        let plan = DictationPlan(unverifiedProfile: TestSupport.profile, context: .chat, capabilities: try TestSupport.capabilities())
+        let capture = try await TestSupport.capture(store: store, plan: plan)
+        let manifest = LibraryFiles(root: directory).folder(capture.id, account: nil).appending(path: "capture.json")
+        let intact = try Data(contentsOf: manifest)
+        try Data("unreadable for now".utf8).write(to: manifest)
+        _ = try await store.recoverInterruptedCaptures()
+        try intact.write(to: manifest)
+        try await store.reconcileHeldCapture(id: capture.id, session: #require(store.accountSession()))
+        _ = try await store.recoverInterruptedCaptures()
+        #expect(try await store.publishPending().failures.isEmpty)
+    }
+
     @Test func aCaptureFinishedAfterTheIndexLoadedIsPublished() async throws {
         let directory = try TestSupport.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

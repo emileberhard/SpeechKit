@@ -324,6 +324,7 @@ public actor DictationLibraryStore {
         let candidates = Set(try await indexedCaptures().filter { !$0.sealed || $0.hasJournal }.map(\.folder.path))
             .union(readFailures.keys).union(recoveryFailures.keys)
         for folder in candidates.map({ URL(fileURLWithPath: $0, isDirectory: true) }) {
+            guard FileManager.default.fileExists(atPath: folder.path) else { recoveryFailures[folder.path] = nil; continue }
             if let id = UUID(uuidString: folder.lastPathComponent) { staleCaptures.insert(id) }
             do {
                 var capture = try LibraryFiles.read(DictationCapture.self, at: folder.appending(path: "capture.json"))
@@ -547,8 +548,8 @@ public actor DictationLibraryStore {
         var bytes: Int64 = 0
         var retained = 0
         for capture in captures where capture.hasOriginal {
-            guard capture.published, let finishedAt = capture.finishedAt, finishedAt < cutoff,
-                  let original = releasableOriginal(capture, account: session.accountIdentifier) else { retained += 1; continue }
+            guard capture.published, let finishedAt = capture.finishedAt, finishedAt < cutoff else { retained += 1; continue }
+            guard let original = releasableOriginal(capture, account: session.accountIdentifier) else { continue }
             bytes += try release(original)
             count += 1
         }
