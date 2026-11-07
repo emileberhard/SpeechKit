@@ -61,11 +61,16 @@ probe waiting up to 287 ms. With the index: first use 389 ms, now decoding every
 manifest once and off the actor, with a longest probe wait of 0.4 ms;
 publication 2.95 ms with a longest wait of 0.67 ms.
 
+The index only selects candidates. Publication, receipt resets and releases
+re-read each candidate's manifest and receipts from disk before acting, so an
+operation still in flight elsewhere cannot mislead them; a capture whose folder
+does not match its account stamp reads as invalid and is never indexed.
+
 Failures have one owner per source: index reads clear a folder's failure when
-it reads again, recovery and publication clear theirs on success, and
+it reads again, recovery and publication each clear theirs on success, and
 `entries()` and each reclaim pass replace theirs. Recovery selects unsealed,
-journaled and unreadable captures from the index on every call; a recovered
-capture is sealed without a journal and is not revisited. Recovery seals on the
+journaled and unreadable captures plus its own earlier failures on every call;
+a recovered capture is sealed without a journal and is not revisited. Recovery seals on the
 actor, so concurrent recoveries cannot seal the same capture twice; it only has
 work after an interrupted capture. Storage status uses the
 capacity owner's accounting, initialized from disk at opening and updated by

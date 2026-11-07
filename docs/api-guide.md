@@ -256,10 +256,11 @@ separate local directory per container. The library never chooses a container.
   with the `DictationPlan` it ran under, in the capture's original account
   partition. `publishPending()` creates deterministic records and is idempotent.
   Its returned `DictationPublicationStatus` includes `unverifiedCaptureCount`.
-  `status()`, `heldCaptures()`, `entries()` and `recoverInterruptedCaptures()`
-  read the store's capture index, which the first of them loads off the actor;
-  later calls re-read only changed, unsealed or unreadable captures, so they stay
-  cheap to call on every foreground refresh. `recoverInterruptedCaptures()`
+  The store's read, recovery, publication and release calls share a capture
+  index, which the first of them loads off the actor; later calls re-read only
+  changed, unsealed or unreadable captures, so `status()`, `heldCaptures()` and
+  `recoverInterruptedCaptures()` stay cheap to call on every foreground refresh.
+  `entries()` and `heldCaptures()` read manifests off the actor. `recoverInterruptedCaptures()`
   retries unresolved candidates on later calls.
   `accountEvents()` is the single owner of `CKAccountChanged`. `accountSession()`
   and `validateAccountSession(_:)` are synchronous and never wait for the

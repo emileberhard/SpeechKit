@@ -59,8 +59,9 @@ public actor DictationLibraryStore {
     private var publishing = false
     private var publishAgain = false
     private var receiptsReset = false
-    private var captureFailures: [String: String] = [:]
     private var readFailures: [String: String] = [:]
+    private var recoveryFailures: [String: String] = [:]
+    private var publishFailures: [String: String] = [:]
     private var entryFailures: [String: String] = [:]
     private var reclaimFailures: [String: String] = [:]
     private var index: [String: CaptureSummary]?
@@ -275,20 +276,26 @@ public actor DictationLibraryStore {
     public func heldCaptures() async throws -> [DictationHeldCapture] {
         let captures = try await indexedCaptures()
         let current = session?.accountIdentifier
-        return captures.compactMap { summary -> DictationHeldCapture? in
-            let reason: DictationHeldReason
-            if summary.account == nil { reason = .unverifiedPlan }
-            else if summary.account != current { reason = .otherAccount }
-            else { return nil }
+        let read = await Self.heldEntries(captures.filter { $0.account == nil || $0.account != current }, current: current, files: files)
+        guard session?.accountIdentifier == current else { return try await heldCaptures() }
+        staleCaptures.formUnion(read.unreadable)
+        return read.held
+    }
+
+    @concurrent private static func heldEntries(_ captures: [CaptureSummary], current: String?, files: LibraryFiles) async -> (held: [DictationHeldCapture], unreadable: [UUID]) {
+        var held: [DictationHeldCapture] = []
+        var unreadable: [UUID] = []
+        for summary in captures {
             do {
                 let capture = try LibraryFiles.read(DictationCapture.self, at: summary.folder.appending(path: "capture.json"))
-                let original = files.folder(capture.id, account: capture.account?.accountIdentifier).appending(path: "original.caf")
-                return DictationHeldCapture(capture: capture, reason: reason, originalURL: FileManager.default.fileExists(atPath: original.path) ? original : nil)
-            } catch {
-                staleCaptures.insert(summary.id)
-                return nil
-            }
-        }.sorted { $0.capture.startedAt > $1.capture.startedAt }
+                let account = capture.account?.accountIdentifier
+                guard account == nil || account != current else { continue }
+                let original = files.folder(capture.id, account: account).appending(path: "original.caf")
+                held.append(DictationHeldCapture(capture: capture, reason: account == nil ? .unverifiedPlan : .otherAccount,
+                    originalURL: FileManager.default.fileExists(atPath: original.path) ? original : nil))
+            } catch { unreadable.append(summary.id) }
+        }
+        return (held.sorted { $0.capture.startedAt > $1.capture.startedAt }, unreadable)
     }
 
     public func reconcileHeldCapture(id: UUID, session lease: DictationAccountSession) throws {
@@ -314,9 +321,9 @@ public actor DictationLibraryStore {
 
     public func recoverInterruptedCaptures() async throws -> [DictationCapture] {
         var recovered: [DictationCapture] = []
-        let candidates = try await indexedCaptures().filter { !$0.sealed || $0.hasJournal }.map(\.folder)
-            + readFailures.keys.map { URL(fileURLWithPath: $0, isDirectory: true) }
-        for folder in candidates {
+        let candidates = Set(try await indexedCaptures().filter { !$0.sealed || $0.hasJournal }.map(\.folder.path))
+            .union(readFailures.keys).union(recoveryFailures.keys)
+        for folder in candidates.map({ URL(fileURLWithPath: $0, isDirectory: true) }) {
             if let id = UUID(uuidString: folder.lastPathComponent) { staleCaptures.insert(id) }
             do {
                 var capture = try LibraryFiles.read(DictationCapture.self, at: folder.appending(path: "capture.json"))
@@ -324,7 +331,7 @@ public actor DictationLibraryStore {
                 if capture.originalSHA256 != nil {
                     let journal = folder.appending(path: "journal")
                     try capacity.remove(journal)
-                    captureFailures[folder.path] = nil
+                    recoveryFailures[folder.path] = nil
                     continue
                 }
                 let pcm = folder.appending(path: "journal/\(capture.id.uuidString)/audio.pcm")
@@ -333,7 +340,7 @@ public actor DictationLibraryStore {
                 let hasAudio = ((try? pcm.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) >= 2
                 guard originalExists || hasAudio else {
                     if !hasAudio, try LibraryFiles.results(in: folder).isEmpty { try capacity.remove(folder) }
-                    captureFailures[folder.path] = nil
+                    recoveryFailures[folder.path] = nil
                     continue
                 }
                 if !originalExists {
@@ -347,9 +354,9 @@ public actor DictationLibraryStore {
                 try capacity.write(capture, to: folder.appending(path: "capture.json"))
                 try capacity.remove(folder.appending(path: "journal"))
                 recovered.append(capture)
-                captureFailures[folder.path] = nil
+                recoveryFailures[folder.path] = nil
             } catch {
-                captureFailures[folder.path] = error.localizedDescription
+                recoveryFailures[folder.path] = error.localizedDescription
             }
         }
         return recovered
@@ -357,9 +364,7 @@ public actor DictationLibraryStore {
 
     public func entries() async throws -> [DictationArchiveEntry] {
         guard let lease = session else { return [] }
-        let partition = files.partition(lease.accountIdentifier).lastPathComponent
-        let captures = try await indexedCaptures().filter { $0.folder.deletingLastPathComponent().lastPathComponent == partition }
-        let read = await Self.archiveEntries(captures)
+        let read = await Self.archiveEntries(try await capturesInPartition(of: lease))
         try validateAccountSession(lease)
         entryFailures = read.failures
         return read.entries
@@ -390,7 +395,6 @@ public actor DictationLibraryStore {
         let id: UUID
         let folder: URL
         let account: String?
-        let misplaced: Bool
         let startedAt: Date
         let finishedAt: Date?
         let originalByteCount: Int64?
@@ -398,7 +402,6 @@ public actor DictationLibraryStore {
         let published: Bool
         let hasOriginal: Bool
         let hasJournal: Bool
-        let hasReceipts: Bool
     }
 
     private struct LoadedIndex: Sendable {
@@ -412,13 +415,13 @@ public actor DictationLibraryStore {
             indexLoad = load
             let loaded: LoadedIndex
             do { loaded = try await load.value } catch {
-                indexLoad = nil
+                if indexLoad == load { indexLoad = nil }
                 throw error
             }
-            indexLoad = nil
+            if indexLoad == load { indexLoad = nil }
             if index == nil {
                 index = loaded.summaries
-                readFailures.merge(loaded.failures) { current, _ in current }
+                readFailures = loaded.failures
             }
         }
         try refreshStaleEntries()
@@ -482,21 +485,22 @@ public actor DictationLibraryStore {
     }
 
     private static func summary(of folder: URL, files: LibraryFiles, chunkBytes: Int) throws -> CaptureSummary {
-        let item = try publication(at: folder)
+        let item = try publication(at: folder, files: files)
         let capture = item.capture
-        let canonical = files.folder(capture.id, account: capture.account?.accountIdentifier)
         return CaptureSummary(id: capture.id, folder: folder, account: capture.account?.accountIdentifier,
-            misplaced: capture.account != nil && folder.standardizedFileURL != canonical.standardizedFileURL,
             startedAt: capture.startedAt, finishedAt: capture.finishedAt, originalByteCount: capture.originalByteCount,
             sealed: capture.originalSHA256 != nil, published: isPublished(item, chunkBytes: chunkBytes),
             hasOriginal: FileManager.default.fileExists(atPath: folder.appending(path: "original.caf").path),
-            hasJournal: FileManager.default.fileExists(atPath: folder.appending(path: "journal").path),
-            hasReceipts: FileManager.default.fileExists(atPath: folder.appending(path: acknowledgementFile).path))
+            hasJournal: FileManager.default.fileExists(atPath: folder.appending(path: "journal").path))
     }
 
-    private static func publication(at folder: URL) throws -> PublicationCapture {
-        try PublicationCapture(capture: LibraryFiles.read(DictationCapture.self, at: folder.appending(path: "capture.json")), folder: folder,
-            acknowledged: acknowledgements(folder), results: LibraryFiles.resultFiles(in: folder))
+    private static func publication(at folder: URL, files: LibraryFiles) throws -> PublicationCapture {
+        let capture = try LibraryFiles.read(DictationCapture.self, at: folder.appending(path: "capture.json"))
+        if let account = capture.account?.accountIdentifier,
+           folder.standardizedFileURL != files.folder(capture.id, account: account).standardizedFileURL {
+            throw DictationLibraryError.invalidCapture(capture.id)
+        }
+        return try PublicationCapture(capture: capture, folder: folder, acknowledged: acknowledgements(folder), results: LibraryFiles.resultFiles(in: folder))
     }
 
     private static func chunkNames(_ id: UUID, byteCount: Int64?, chunkBytes: Int) -> [String] {
@@ -526,7 +530,7 @@ public actor DictationLibraryStore {
         }
         let partitions = [files.partition(current).path, files.partition(nil).path]
         var messages: [UUID: String] = [:]
-        for source in [readFailures, entryFailures, captureFailures, reclaimFailures] {
+        for source in [readFailures, entryFailures, recoveryFailures, publishFailures, reclaimFailures] {
             for (path, message) in source {
                 let folder = URL(fileURLWithPath: path, isDirectory: true)
                 guard partitions.contains(folder.deletingLastPathComponent().path), let id = UUID(uuidString: folder.lastPathComponent) else { continue }
@@ -543,9 +547,9 @@ public actor DictationLibraryStore {
         var bytes: Int64 = 0
         var retained = 0
         for capture in captures where capture.hasOriginal {
-            guard capture.published, let finishedAt = capture.finishedAt, finishedAt < cutoff else { retained += 1; continue }
-            staleCaptures.insert(capture.id)
-            bytes += try release(capture.folder.appending(path: "original.caf"))
+            guard capture.published, let finishedAt = capture.finishedAt, finishedAt < cutoff,
+                  let original = releasableOriginal(capture, account: session.accountIdentifier) else { retained += 1; continue }
+            bytes += try release(original)
             count += 1
         }
         return DictationReleaseReport(releasedCount: count, releasedBytes: bytes, retainedUnpublishedCount: retained)
@@ -559,6 +563,14 @@ public actor DictationLibraryStore {
         return captures
     }
 
+    private func releasableOriginal(_ summary: CaptureSummary, account: String) -> URL? {
+        staleCaptures.insert(summary.id)
+        guard let item = try? Self.publication(at: summary.folder, files: files), item.capture.account?.accountIdentifier == account,
+              Self.isPublished(item, chunkBytes: chunkBytes) else { return nil }
+        let original = summary.folder.appending(path: "original.caf")
+        return FileManager.default.fileExists(atPath: original.path) ? original : nil
+    }
+
     private func release(_ original: URL) throws -> Int64 {
         try capacity.writeBeyondLimit(ReleaseMarker(releasedAt: .now), to: original.deletingLastPathComponent().appending(path: Self.releaseMarker))
         let size = Int64(try original.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
@@ -568,11 +580,12 @@ public actor DictationLibraryStore {
     }
 
     private func reclaimPublishedOriginals(lease: DictationAccountSession) async throws {
-        reclaimFailures = [:]
+        var failures: [String: String] = [:]
+        defer { reclaimFailures = failures }
         let retainedBytes = capacity.limit / 2
         guard capacity.usedBytes > retainedBytes else { return }
         var remaining = try await indexedCaptures()
-            .filter { $0.account == lease.accountIdentifier && !$0.misplaced && $0.published && $0.hasOriginal }
+            .filter { $0.account == lease.accountIdentifier && $0.published && $0.hasOriginal }
             .sorted { $0.startedAt < $1.startedAt }[...]
         while capacity.usedBytes > retainedBytes, !remaining.isEmpty, !publishAgain {
             var batch: [(item: CaptureSummary, names: [String])] = []
@@ -587,7 +600,7 @@ public actor DictationLibraryStore {
             catch {
                 try validateAccountSession(lease)
                 if let oldest = batch.first?.item {
-                    reclaimFailures[oldest.folder.path] = "Could not confirm that iCloud has this uploaded recording, so its local original is kept: \(Self.libraryError(error).localizedDescription)"
+                    failures[oldest.folder.path] = "Could not confirm that iCloud has this uploaded recording, so its local original is kept: \(Self.libraryError(error).localizedDescription)"
                 }
                 return
             }
@@ -596,14 +609,12 @@ public actor DictationLibraryStore {
             let missingNames = Set(missing.map(\.recordName))
             for (item, names) in batch {
                 let folder = item.folder.path
-                let original = item.folder.appending(path: "original.caf")
                 guard !names.contains(where: missingNames.contains) else {
-                    reclaimFailures[folder] = "iCloud no longer has all of this uploaded recording, so its local original is kept."
+                    failures[folder] = "iCloud no longer has all of this uploaded recording, so its local original is kept."
                     continue
                 }
-                guard capacity.usedBytes > retainedBytes, FileManager.default.fileExists(atPath: original.path) else { continue }
-                staleCaptures.insert(item.id)
-                do { _ = try release(original) } catch { reclaimFailures[folder] = error.localizedDescription }
+                guard capacity.usedBytes > retainedBytes, let original = releasableOriginal(item, account: lease.accountIdentifier) else { continue }
+                do { _ = try release(original) } catch { failures[folder] = error.localizedDescription }
             }
         }
     }
@@ -612,9 +623,11 @@ public actor DictationLibraryStore {
         let captures = try await capturesInPartition(of: session)
         if publishing { receiptsReset = true; publishAgain = true }
         var reset = 0
-        for capture in captures where capture.hasReceipts {
+        for capture in captures {
+            let receipts = capture.folder.appending(path: Self.acknowledgementFile)
+            guard FileManager.default.fileExists(atPath: receipts.path) else { continue }
             staleCaptures.insert(capture.id)
-            try capacity.remove(capture.folder.appending(path: Self.acknowledgementFile))
+            try capacity.remove(receipts)
             reset += 1
         }
         return reset
@@ -635,15 +648,14 @@ public actor DictationLibraryStore {
                 try validateAccountSession(lease)
                 defer { staleCaptures.insert(summary.id) }
                 do {
-                    guard !summary.misplaced else { throw DictationLibraryError.invalidCapture(summary.id) }
-                    let item = try Self.publication(at: summary.folder)
-                    guard item.capture.originalSHA256 != nil else { continue }
+                    let item = try Self.publication(at: summary.folder, files: files)
+                    guard item.capture.account?.accountIdentifier == lease.accountIdentifier, item.capture.originalSHA256 != nil else { continue }
                     try await publishCapture(item, lease: lease)
-                    captureFailures[summary.folder.path] = nil
+                    publishFailures[summary.folder.path] = nil
                 } catch DictationLibraryError.accountChanged { throw DictationLibraryError.accountChanged }
                 catch is CancellationError { throw CancellationError() }
                 catch is ReceiptsReset { break }
-                catch { captureFailures[summary.folder.path] = error.localizedDescription }
+                catch { publishFailures[summary.folder.path] = error.localizedDescription }
             }
             try validateAccountSession(lease)
             try await reclaimPublishedOriginals(lease: lease)

@@ -625,6 +625,41 @@ import Testing
         #expect(try await store.status().pendingCaptureCount == 0)
     }
 
+    @Test func aReseedDuringAnUploadResetsThatCapturesReceipts() async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = FakeCloud(profile: TestSupport.profile)
+        let store = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        let capture = try await TestSupport.capture(store: store, plan: store.makePlan(context: .chat, capabilities: TestSupport.capabilities()))
+        _ = try await store.status()
+        await cloud.holdCreate(named: DictationLibrarySchema.chunkName(capture.id, index: 0))
+        let publication = Task { try await store.publishPending() }
+        await cloud.waitUntilCreateHeld()
+        await cloud.deleteZone()
+        let reset = try await store.reseedPublication(session: #require(store.accountSession()))
+        await cloud.releaseCreate()
+        _ = try await publication.value
+        #expect(reset == 1)
+        #expect(await cloud.records.keys.contains(DictationLibrarySchema.captureName(capture.id)))
+    }
+
+    @Test func aRecoveryFailureClearsOnceTheCaptureReadsAgain() async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = FakeCloud(profile: TestSupport.profile)
+        let store = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        let capture = try await TestSupport.capture(store: store, plan: store.makePlan(context: .chat, capabilities: TestSupport.capabilities()))
+        #expect(try await store.publishPending().pendingCaptureCount == 0)
+        let manifest = LibraryFiles(root: directory).folder(capture.id, account: "account-a").appending(path: "capture.json")
+        let intact = try Data(contentsOf: manifest)
+        let reopened = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        try Data("unreadable for now".utf8).write(to: manifest)
+        _ = try await reopened.recoverInterruptedCaptures()
+        try intact.write(to: manifest)
+        _ = try await reopened.recoverInterruptedCaptures()
+        #expect(try await reopened.publishPending().failures.isEmpty)
+    }
+
     @Test func aCaptureFinishedAfterTheIndexLoadedIsPublished() async throws {
         let directory = try TestSupport.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

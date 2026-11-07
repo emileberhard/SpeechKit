@@ -52,8 +52,10 @@ credentials, personal configuration, raw provider output or recordings.
   An operation marks each capture it changed for re-reading once it finishes;
   unsealed captures and failed reads are re-read on every use; settled captures
   are re-read only by a new store, so out-of-process writers require reopening
-  it. Each failure source clears or replaces only its own failures. Publication
-  checks immutable record receipts before opening payloads.
+  it. The index only picks candidates: a decision that changes disk, such as
+  publishing, resetting receipts or releasing an original, re-reads the capture
+  from disk first. Each failure source clears or replaces only its own
+  failures. Publication checks immutable record receipts before opening payloads.
 - Every target builds with `NonisolatedNonsendingByDefault`, so a nonisolated
   async function runs on the caller's actor. Mark `@concurrent` any nonisolated
   async function whose CPU or file work grows with an audio, image or archive
