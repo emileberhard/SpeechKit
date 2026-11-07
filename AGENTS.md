@@ -47,10 +47,13 @@ credentials, personal configuration, raw provider output or recordings.
   full, so capture never stops for audio CloudKit already holds. Unacknowledged,
   held and other-account originals are never released, and an original is
   released only after CloudKit confirms its capture and chunk records.
-- One store owns its isolated directory. Publication checks immutable record
-  receipts before opening payloads and returns status from the same inventory.
-  Recovery retries failed/active candidates but never rescans completed ones
-  during that store lifetime; reopening inventories disk again.
+- One store owns its isolated directory and an in-memory capture index: loaded
+  off the actor on first use, never persisted, never authoritative over disk.
+  An operation marks each capture it changed for re-reading once it finishes;
+  unsealed captures and failed reads are re-read on every use; settled captures
+  are re-read only by a new store, so out-of-process writers require reopening
+  it. Each failure source clears or replaces only its own failures. Publication
+  checks immutable record receipts before opening payloads.
 - Every target builds with `NonisolatedNonsendingByDefault`, so a nonisolated
   async function runs on the caller's actor. Mark `@concurrent` any nonisolated
   async function whose CPU or file work grows with an audio, image or archive

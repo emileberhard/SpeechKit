@@ -27,18 +27,47 @@ audio is local because the original generation account's redistribution rights
 were not established. The fixture script records synthetic sentences and takes
 credentials explicitly. Offline tests require no provider account.
 
-Publication uses one metadata inventory for uploads and its returned status.
-Immutable record names and durable acknowledgements determine pending payloads
-before originals or results are opened. Unpublished originals still undergo full
-hash validation; resumed uploads seek directly to missing chunks. Keeping the
-existing receipts avoids a second persistent index and its crash-consistency
-contract. Metadata enumeration remains proportional to capture count; payload
-I/O is proportional to work still needing publication.
+The store keeps an in-memory index of capture summaries (account, seal, receipt
+and file presence) keyed by structural folder path. The first call that needs
+it loads it in a `@concurrent` task, so the actor keeps serving cheap calls such
+as `profileState()`, `makePlan` and `beginCapture` meanwhile. Later calls
+re-read only captures that store operations changed, marked once each operation
+finishes because publication suspends between uploads; unsealed captures, whose
+writer owns `capture.json`; and folders whose last read failed. Immutable record
+names and durable acknowledgements determine pending payloads before originals
+or results are opened, and publication re-reads each pending manifest before
+uploading it. Unpublished originals still undergo full hash validation; hashing,
+chunk staging and `entries()` reads run off the actor, and resumed uploads seek
+directly to missing chunks.
 
-Recovery inventories existing journals on its first invocation per store, then
-retains only failed or active candidates and captures started by that store.
-Successful candidates are not revisited. One store owns its isolated directory;
-out-of-process writers require reopening the store. Storage status uses the
+Decision, 2026-11-07. Dictation start must not queue behind library
+maintenance. Every publication, status, held-capture, entry and recovery call
+used to enumerate and decode the whole archive synchronously on the actor, so a
+start waited for the scan that follows each dictation. Moving the same scans off
+the actor would keep their cost on every call, several times per refresh. A
+persistent index would add a second durable truth and its crash-consistency
+contract. The in-memory index removes the repeated scans while disk stays
+authoritative; it costs one off-actor scan per store lifetime and relies on the
+existing rule that one store owns its isolated directory, so out-of-process
+writers require reopening the store. If a second writer process ever becomes
+real, a lock taken at opening is the fix, not more re-reading.
+
+The publication benchmark (see the API guide's Benchmarks section) seeds 2,000
+published captures, then reopens the store 15 times and measures first use and
+a publication pass after one dictation while a probe task repeatedly calls
+`profileState()`. In a release build on an M6 Mac, medians before the index:
+first use 107 ms with the probe blocked throughout, publication 335 ms with the
+probe waiting up to 287 ms. With the index: first use 389 ms, now decoding every
+manifest once and off the actor, with a longest probe wait of 0.4 ms;
+publication 2.95 ms with a longest wait of 0.67 ms.
+
+Failures have one owner per source: index reads clear a folder's failure when
+it reads again, recovery and publication clear theirs on success, and
+`entries()` and each reclaim pass replace theirs. Recovery selects unsealed,
+journaled and unreadable captures from the index on every call; a recovered
+capture is sealed without a journal and is not revisited. Recovery seals on the
+actor, so concurrent recoveries cannot seal the same capture twice; it only has
+work after an interrupted capture. Storage status uses the
 capacity owner's accounting, initialized from disk at opening and updated by
 writes/removals, rather than recounting the tree on each foreground pass.
 

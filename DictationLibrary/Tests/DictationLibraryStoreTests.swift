@@ -610,6 +610,61 @@ import Testing
         #expect(await cloud.resultRecordNames().contains(DictationLibrarySchema.resultName(late.id)))
     }
 
+    @Test func aStatusReadDuringPublicationStillSeesTheCapturePublished() async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = FakeCloud(profile: TestSupport.profile)
+        let store = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        let capture = try await TestSupport.capture(store: store, plan: store.makePlan(context: .chat, capabilities: TestSupport.capabilities()))
+        await cloud.holdCreate(named: DictationLibrarySchema.captureName(capture.id))
+        let publication = Task { try await store.publishPending() }
+        await cloud.waitUntilCreateHeld()
+        #expect(try await store.status().pendingCaptureCount == 1)
+        await cloud.releaseCreate()
+        #expect(try await publication.value.pendingCaptureCount == 0)
+        #expect(try await store.status().pendingCaptureCount == 0)
+    }
+
+    @Test func aCaptureFinishedAfterTheIndexLoadedIsPublished() async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = FakeCloud(profile: TestSupport.profile)
+        let store = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        let writer = try await store.beginCapture(plan: store.makePlan(context: .chat, capabilities: TestSupport.capabilities()))
+        #expect(try await store.status().pendingCaptureCount == 1)
+        let audio = TestSupport.buffer(seconds: 1)
+        try writer.configure(format: audio.format)
+        writer.append(audio)
+        let capture = try await writer.finish()
+        let status = try await store.publishPending()
+        #expect(status.pendingCaptureCount == 0)
+        #expect(status.failures.isEmpty)
+        #expect(await cloud.records.keys.contains(DictationLibrarySchema.captureName(capture.id)))
+    }
+
+    @Test func settledCapturesAreReadAgainOnlyAfterReopeningOrAFailedRead() async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = FakeCloud(profile: TestSupport.profile)
+        let store = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        let capture = try await TestSupport.capture(store: store, plan: store.makePlan(context: .chat, capabilities: TestSupport.capabilities()))
+        #expect(try await store.publishPending().pendingCaptureCount == 0)
+        let manifest = LibraryFiles(root: directory).folder(capture.id, account: "account-a").appending(path: "capture.json")
+        let intact = try Data(contentsOf: manifest)
+        try Data("changed outside the store".utf8).write(to: manifest)
+
+        let unchanged = try await store.publishPending()
+        #expect(unchanged.pendingCaptureCount == 0)
+        #expect(unchanged.failures.isEmpty)
+        let reopened = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        #expect(try await reopened.publishPending().failures.map(\.captureID) == [capture.id])
+
+        try intact.write(to: manifest)
+        let healed = try await reopened.status()
+        #expect(healed.failures.isEmpty)
+        #expect(healed.pendingCaptureCount == 0)
+    }
+
     @Test func partialPublicationResumesAtOriginalChunkOffsetsAfterAnUncertainUpload() async throws {
         let directory = try TestSupport.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

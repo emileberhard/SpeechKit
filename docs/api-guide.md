@@ -255,10 +255,12 @@ separate local directory per container. The library never chooses a container.
   Opus CAF (`originalURL`). `addResult(_:)` stores immutable result versions, each
   with the `DictationPlan` it ran under, in the capture's original account
   partition. `publishPending()` creates deterministic records and is idempotent.
-  Its returned `DictationPublicationStatus` shares that pass's inventory and
-  includes `unverifiedCaptureCount`, so foreground publication needs no separate
-  status or held-capture scan. `recoverInterruptedCaptures()` inventories once
-  per store and retries unresolved candidates on later calls.
+  Its returned `DictationPublicationStatus` includes `unverifiedCaptureCount`.
+  `status()`, `heldCaptures()`, `entries()` and `recoverInterruptedCaptures()`
+  read the store's capture index, which the first of them loads off the actor;
+  later calls re-read only changed, unsealed or unreadable captures, so they stay
+  cheap to call on every foreground refresh. `recoverInterruptedCaptures()`
+  retries unresolved candidates on later calls.
   `accountEvents()` is the single owner of `CKAccountChanged`. `accountSession()`
   and `validateAccountSession(_:)` are synchronous and never wait for the
   store's other work; `accountSession()` already returns a session before

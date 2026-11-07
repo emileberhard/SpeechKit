@@ -57,14 +57,6 @@ struct LibraryFiles: Sendable {
         try decode(type, from: Data(contentsOf: url))
     }
 
-    func captures(account: String?) throws -> [DictationCapture] {
-        let directory = partition(account)
-        guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
-        return try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-            .filter { UUID(uuidString: $0.lastPathComponent) != nil }
-            .map { try Self.read(DictationCapture.self, at: $0.appending(path: "capture.json")) }
-    }
-
     static func resultFiles(in folder: URL) throws -> [URL] {
         try resultFiles(inDirectory: folder.appending(path: "results"))
     }
