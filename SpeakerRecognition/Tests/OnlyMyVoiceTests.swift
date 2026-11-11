@@ -44,6 +44,15 @@ enum SpeakerFixtures {
         return Array(UnsafeBufferPointer(start: output.floatChannelData![0], count: Int(output.frameLength)))
     }
 
+    static func continuousSpeech(_ name: String) throws -> [Float] {
+        let samples = try speech(name)
+        return stride(from: 0, through: samples.count - 160, by: 160).flatMap { start -> [Float] in
+            let frame = samples[start..<start + 160]
+            let rms = sqrt(frame.reduce(Float.zero) { $0 + $1 * $1 } / 160)
+            return rms > 0.02 ? frame.map { $0 * 0.1 / rms } : []
+        }
+    }
+
     static func pcm16(_ samples: [Float]) -> Data {
         var data = Data(capacity: samples.count * 2)
         for sample in samples {
@@ -113,20 +122,13 @@ struct VoiceWatchTests {
         #expect(pieces.dropFirst(3).map(\.count).prefix(2).allSatisfy { $0 <= 160_000 && $0 > 158_000 })
     }
 
-    @Test func aContinuousMixRequestsLabelsAgainstTheTrustedProfile() async throws {
+    @Test(arguments: [3.0, 4.1, 5.0])
+    func aContinuousMixRequestsLabelsAgainstTheTrustedProfile(ownSeconds: Double) async throws {
         let embedder = try SpeakerFixtures.embedder()
-        func voiced(_ name: String) throws -> [Float] {
-            let samples = try SpeakerFixtures.speech(name)
-            return stride(from: 0, through: samples.count - 160, by: 160).flatMap { start -> [Float] in
-                let frame = samples[start..<start + 160]
-                let rms = sqrt(frame.reduce(Float.zero) { $0 + $1 * $1 } / 160)
-                return rms > 0.02 ? frame.map { $0 * 0.1 / rms } : []
-            }
-        }
-        let mine = try voiced("en-teen-note")
-        let other = try voiced("en-landlord-email")
+        let mine = try SpeakerFixtures.continuousSpeech("en-teen-note")
+        let other = try SpeakerFixtures.continuousSpeech("en-landlord-email")
         let profile = try await embedder.embedding(of: mine)
-        let mix = Array(other.prefix(64_000)) + Array(mine.prefix(48_000))
+        let mix = Array(other.prefix(64_000)) + Array(mine.prefix(Int(ownSeconds * 16_000)))
         var listener = VoiceListener(embedder: embedder, profile: profile)
         let pcm = SpeakerFixtures.pcm16(mix)
         for start in stride(from: 0, to: pcm.count, by: 3_200) {

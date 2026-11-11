@@ -213,7 +213,8 @@ nonisolated struct VoiceRecording: Sendable {
     let windows: [VoicedPiece]
     let profile: SpeakerEmbedding?
     private static let profileMismatchThreshold: Float = 0.2
-    private static let windowCoherenceThreshold: Float = 0.43
+    private static let windowSupportThreshold: Float = 0.5
+    private static let differentWindowThreshold: Float = 0.05
 
     var otherVoiceHeard: Bool { Self.incoherentCount(in: pieces, threshold: VoiceFilter.sameVoiceThreshold) > 0 }
 
@@ -235,10 +236,27 @@ nonisolated struct VoiceRecording: Sendable {
         return otherVoiceHeard || windows.count(where: { $0.embedding.similarity(to: profile) < Self.profileMismatchThreshold }) >= 2
     }
 
-    var containsMixedVoices: Bool { otherVoiceHeard || Self.incoherentCount(in: windows, threshold: Self.windowCoherenceThreshold) >= 3 }
+    var containsMixedVoices: Bool {
+        if otherVoiceHeard { return true }
+        let supported = windows.indices.filter { index in
+            windows.indices.contains { other in
+                index != other && windows[index].embedding.similarity(to: windows[other].embedding) >= Self.windowSupportThreshold
+            }
+        }
+        return supported.indices.contains { index in
+            supported.prefix(index).contains { other in
+                windows[supported[index]].embedding.similarity(to: windows[other].embedding) < Self.differentWindowThreshold
+            }
+        }
+    }
 
     @concurrent func learningCandidate() async throws -> SpeakerEmbedding? {
-        guard isComplete, !containsMixedVoices, pieces.reduce(0, { $0 + $1.samples.count }) >= Self.minimumLearningSamples else { return nil }
+        guard !containsMixedVoices else { return nil }
+        return try await singleSpeakerCandidate()
+    }
+
+    @concurrent func singleSpeakerCandidate() async throws -> SpeakerEmbedding? {
+        guard isComplete, pieces.reduce(0, { $0 + $1.samples.count }) >= Self.minimumLearningSamples else { return nil }
         return try await audio.embedding(of: pieces.map(\.samples))
     }
 }

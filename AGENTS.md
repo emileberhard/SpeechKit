@@ -78,6 +78,8 @@ credentials, personal configuration, raw provider output or recordings.
 - Speaker recognition separates profile contrast (whether labels are useful)
   from profile-independent voice coherence (whether a recording may teach).
   Coherent mismatches must still reach trust observations after exemplars freeze.
+  A successful labelled pass owns learning eligibility: at most one speaker may
+  teach; multiple speakers skip both exemplars and trust observations.
   Callers own transport wait budgets; every attempted labelled check reports its
   elapsed time and timeout keeps everyone's text.
 - Tests use Swift Testing and synthetic inputs. Default tests stay offline;

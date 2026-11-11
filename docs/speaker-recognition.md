@@ -41,9 +41,9 @@ the initial rule.
 `VoiceWatch` is fed the same 16 kHz PCM the provider receives, on its own
 task. It
 cuts voiced audio into pieces at pauses, capped at 10 s, and embeds each piece
-of at least 1 s as it ends. Each piece costs one model call on the CPU, about
-12 calls per minute of speech, or roughly 0.4% of one core. That keeps the work
-background-safe and finished by the time the user stops.
+of at least 1 s as it ends. The pieces and windows use CPU-only inference. The device calibration below
+measures the added cost at 2.19% of one core during continuous capture, keeping
+the work background-safe and ahead of incoming audio.
 
 Pieces still detect a different voice against the duration-weighted mean of
 the other pieces at 0.35. In addition, overlapping 2 s windows of voiced audio
@@ -67,7 +67,9 @@ request while the profile is trusted and the recording is at most 10 minutes.
 diarized phrases, one embedding per label and the profile; its output is the
 labels to keep.
 
-1. A label's evidence is its own speech: its word spans, padded and
+1. A label's speech duration is the length of its merged word spans, including
+   gaps of up to 150 ms between words; the 1 s and 2 s bars use that definition.
+   Its evidence is its own speech: its word spans, padded and
    concatenated, longest first, up to the model's 10 s window, and tiled when
    shorter. The sequence retains the provider PCM for this recording.
 2. A label with under 1 s of speech is kept unjudged. A label with 1–2 s
@@ -146,7 +148,7 @@ labels by the rejection threshold being calibrated.
 Contrast requires a piece or window at least 0.35 against the profile. The
 original piece detector still suffices once that match exists; the new route
 requires two low windows. The chosen 0.20 point also catches a continuous
-2.659 s other-voice turn missed by the 0.10 point. Every ordinary flag has a
+other-voice turn under 3 s that the 0.10 point missed. Every ordinary flag has a
 fresh labelled spot check, all with one label; the other ordinary recordings
 are text-screened rather than independently diarized. The extra requests are
 false alarms in this sample and deliver the original text. The flag rate rises
@@ -154,10 +156,8 @@ from the earlier roughly 6% target to about 10%; that latency trade-off is
 explicit.
 
 Nine of twenty screened multi-label recordings remain unflagged. Two have no
-profile-disparate label after the word-timed replay. The other seven hold
-0.500, 0.798, 1.159, 1.560, 1.999, 2.600 and 4.677 s of other-voice speech in
-total, but their longest continuous runs are only 0.500, 0.439, 1.159, 1.560,
-0.879, 1.120 and 1.600 s respectively. They remain fail-open interjection
+profile-disparate label after the word-timed replay. The other seven hold between 0.5 and 4.7 s of other-voice speech in total,
+with no continuous run longer than 1.6 s. They remain fail-open interjection
 misses. Across the screened set the watcher and filter together keep twelve of
 twenty other labels; if cached labels are supplied for every recording, the
 filter alone keeps eight. Both leaks request labels and keep only their user's
@@ -173,9 +173,10 @@ reject a label. The changed short-turn leak has a valid short anchor and all
 three other labels below both rejection bars. These results support this
 corpus's operating point, not a guarantee for every person or microphone.
 
-Profile mismatch does not veto learning. Only profile-independent piece or
-window incoherence does. The window gate requires three windows below 0.43,
-calibrated separately from the 0.35 piece gate. The synthetic regression starts with a trusted,
+Profile mismatch does not veto learning. Without labels, only profile-independent piece or
+window evidence does. A window is supported when another window reaches 0.50
+against it. Two supported windows below 0.05 against each other establish a
+second voice; the original 0.35 piece rule remains in force. The synthetic regression starts with a trusted,
 frozen wrong profile, feeds a coherent mismatching recording through the real
 listener, and proves that eight trust misses still reset it. Learning and label
 requests deliberately use different signals. On 340 ordinary recordings, the
@@ -185,35 +186,42 @@ were withheld. All twenty have a word-timed single-speaker reply. Their 43 low
 windows contain nineteen with no provider-word overlap and twenty-four with
 some word overlap; five recordings have no word overlap in any low window.
 Thus the loss includes both non-speech and actual speech, not just a second
-voice. Requiring three windows below 0.43 admits 198 candidates (58.2%), only
-eight fewer than the original gate (2.4 percentage points), and still treats
-both leaked recordings as mixed. Twenty-four of the 32 ordinary request flags
-are also withheld from learning; the other eight may still teach.
+voice. Requiring three windows below 0.43 admits 198 candidates (58.2%) and treats
+both real leaks as mixed, but misses balanced synthetic mixes. The chosen
+supported-pair rule admits 192 (56.5%), fourteen fewer than the original gate
+(4.1 percentage points), and marks the short and balanced continuous synthetic
+mixes as mixed. The corresponding uncorroborated pair rule admits only 188.
+Thirty of the 32 ordinary request flags are also withheld by the standalone
+gate. A successful labelled pass supersedes that gate: at most one speaker may
+teach, while two or more speakers skip both exemplars and trust observations.
+Eight of 34 cached-labelled recordings that pass the standalone gate have
+multiple labels and are therefore vetoed by the authoritative reply.
 
-Fifty-eight new paid labelled requests were made through the existing personal
+Sixty-seven new paid labelled requests were made through the existing personal
 route: two leak replays, ten missing word-timed replies from the screened set,
-forty-three ordinary spot checks and three serial latency checks. All other
+fifty-two ordinary spot checks (nine also resolve learning eligibility) and
+three serial latency checks. All other
 labelled replies were reused. Each new request records audio length, latency
-and status privately; all 58 succeeded. The latency figures include upload and
+and status privately; all 67 succeeded. The latency figures include upload and
 provider time, with concurrent batches as well as three serial requests.
 
 | Audio length | Requests | Median reply | p95 reply | Maximum |
 | --- | --- | --- | --- | --- |
-| Under 15 s | 18 | 0.865 s | 3.829 s | 3.829 s |
-| 15–60 s | 30 | 1.564 s | 2.649 s | 2.650 s |
-| 60–120 s | 7 | 1.962 s | 6.442 s | 6.442 s |
+| Under 15 s | 21 | 0.872 s | 2.792 s | 3.829 s |
+| 15–60 s | 34 | 1.610 s | 2.650 s | 3.538 s |
+| 60–120 s | 9 | 2.412 s | 6.442 s | 6.442 s |
 | 120–600 s | 3 | 2.329 s | 2.905 s | 2.905 s |
 
-Overall median is 1.262 s, p95 2.905 s and maximum 6.442 s. The three serial
-checks took 3.829, 1.254 and 6.442 s, so a typical half-second response is not
+Overall median is 1.589 s, p95 3.538 s and maximum 6.442 s. The three serial
+checks ranged from 1.254 to 6.442 s, so a typical half-second response is not
 established by this run. The prior three client replies at 0.49–0.56 s and the
 2.165 s missed-deadline incident remain additional evidence. Service-journal
 and device-network tail measurements were unavailable.
 
 For the access transport that already holds the audio, the recommended caller
 budget is `min(6 s, 4 s + 5 ms per second of audio)`: 4.15 s at 30 s, 4.6 s at
-2 minutes, capped at 6 s. It covers 57/58 fresh replies and the earlier missed
-incident. The 6.442 s outlier still times out and delivers everyone; extending
+2 minutes, capped at 6 s. It covers 65/67 fresh replies and the earlier missed
+incident. Two observed tail replies still time out and deliver everyone; extending
 ordinary waits to chase that spike is deliberately rejected. A 2.2 s reply
 inside a caller-supplied 3 s budget is tested with an injected clock, and the
 existing timeout test verifies fail-open delivery and elapsed reporting.
@@ -274,8 +282,10 @@ the iOS app deletes the file; on macOS it stays in Application Support until
 Forget My Voice.
 
 - **Learning** requires at least 5 s of speech and no profile-independent
-  evidence of mixed voices: the original piece comparison uses 0.35, and at least three 2 s
-  windows must score below 0.43 against the pooled other windows. A mismatch with
+  evidence of mixed voices: the original piece comparison uses 0.35, while the window rule requires
+  two supported windows below 0.05 against each other, each supported by another
+  window at 0.50. A successful labelled pass instead decides eligibility:
+  at most one attributed speaker may teach; multiple speakers skip learning. A mismatch with
   the profile alone never vetoes learning. After delivery, one embedding of up
   to 10 s of speech becomes a candidate. Trust observations run even after the
   exemplar set freezes, so eight coherent misses in ten still reset a wrong

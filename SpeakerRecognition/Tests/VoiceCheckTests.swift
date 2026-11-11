@@ -72,6 +72,69 @@ struct VoiceCheckTests {
         await check.cancel()
     }
 
+    @Test(.timeLimit(.minutes(1)), arguments: [4.1, 5.0])
+    func multipleLabelledSpeakersNeverTeachTheProfile(ownSeconds: Double) async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let own = try SpeakerFixtures.continuousSpeech("en-teen-note")
+        let other = try SpeakerFixtures.continuousSpeech("en-landlord-email")
+        let embedding = try await SpeakerFixtures.embedder().embedding(of: own)
+        let store = VoiceProfileStore(accountDirectory: directory)
+        for _ in 0..<15 { try await store.learn(embedding, startedAt: .now) }
+        let before = try await store.profile()
+        #expect(before.isTrusted && !before.isFrozen)
+        let samples = Array(other.prefix(64_000)) + Array(own.prefix(Int(ownSeconds * 16_000)))
+        let split = 4_000
+        let end = samples.count * 1_000 / 16_000
+        let phrases = [
+            SpeakerPhrase(speaker: 0, text: "First.", words: [.zero ..< .milliseconds(split)]),
+            SpeakerPhrase(speaker: 1, text: "Second.", words: [.milliseconds(split) ..< .milliseconds(end)]),
+        ]
+        let requested = Signal()
+        var check: VoiceCheck? = try VoiceCheck(profile: before, store: store, startedAt: .now,
+                                               onFailure: { _, _ in Issue.record("Unexpected failure") })
+        weak var released = check
+        check!.append(SpeakerFixtures.pcm16(samples))
+        await check!.finish {
+            await requested.open()
+            return phrases
+        }
+        await requested.wait()
+        let result = try await check!.resolve(everyone: "First. Second.", waitingUpTo: .seconds(5))
+        #expect(result.outcome.labelCount == 2)
+        await check!.cancel()
+        check = nil
+        while released != nil { await Task.yield() }
+        #expect(try await store.profile() == before)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func cancellationDuringStoredWatcherFailureThrows() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = try await trustedProfile()
+        let watch = VoiceWatch(modelURL: directory.appendingPathComponent("missing.mlmodelc"), profile: profile.trustedMean)
+        let caller = OSAllocatedUnfairLock<Task<VoiceCheckResult, any Error>?>(initialState: nil)
+        let failures = OSAllocatedUnfairLock(initialState: 0)
+        let check = VoiceCheck(profile: profile, store: VoiceProfileStore(accountDirectory: directory), startedAt: .now,
+                               onFailure: { _, _ in
+            failures.withLock { $0 += 1 }
+            caller.withLock { $0 }?.cancel()
+        }, watch: watch, clock: .continuous)
+        await check.finish { [] }
+        await check.checking?.value
+        let start = Signal()
+        let resolving = Task {
+            await start.wait()
+            return try await check.resolve(everyone: "Everyone.", waitingUpTo: .seconds(2))
+        }
+        caller.withLock { $0 = resolving }
+        await start.open()
+        await #expect(throws: CancellationError.self) { try await resolving.value }
+        #expect(failures.withLock { $0 } == 1)
+        await check.cancel()
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func theDeadlineDoesNotJoinAnUncooperativeFetchAndLateLabelsCannotChangeDelivery() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)

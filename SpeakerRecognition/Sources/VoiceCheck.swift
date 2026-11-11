@@ -29,6 +29,11 @@ public actor VoiceCheck {
         case cancelled
     }
 
+    private enum LearningEvidence {
+        case coherentRecording
+        case labelledSingleSpeaker
+    }
+
     private nonisolated let watch: VoiceWatch
     private let profile: VoiceProfile
     private let store: VoiceProfileStore
@@ -36,7 +41,7 @@ public actor VoiceCheck {
     private let onFailure: @Sendable (VoiceFilterStage, any Error) -> Void
     private let clock: VoiceCheckClock
     private var state = State.capturing
-    private var checking: Task<Void, Never>?
+    private(set) var checking: Task<Void, Never>?
     private var fetching: Task<[SpeakerPhrase], any Error>?
     private var filtering: Task<Void, Never>?
     private var timer: Task<Void, Never>?
@@ -100,24 +105,25 @@ public actor VoiceCheck {
             cancel()
             throw CancellationError()
         }
+        let result: VoiceCheckResult
         switch state {
         case .cancelled, .resolving: throw CancellationError()
-        case .delivered(let result): return result
+        case .delivered(let delivered): result = delivered
         case .capturing:
             watch.finish()
-            return deliver(everyone: everyone, text: everyone, outcome: .undecided, learns: true)
+            result = deliver(everyone: everyone, text: everyone, outcome: .undecided, learning: .coherentRecording)
         case .checking:
             checking?.cancel()
-            return deliver(everyone: everyone, text: everyone, outcome: .undecided, learns: true)
+            result = deliver(everyone: everyone, text: everyone, outcome: .undecided, learning: .coherentRecording)
         case .decided(let outcome):
-            return deliver(everyone: everyone, text: everyone, outcome: outcome, learns: true)
+            result = deliver(everyone: everyone, text: everyone, outcome: outcome, learning: .coherentRecording)
         case .failed(let error):
             report(error)
-            return deliver(everyone: everyone, text: everyone, outcome: .failed, learns: false)
+            result = deliver(everyone: everyone, text: everyone, outcome: .failed, learning: nil)
         case .requested:
             self.everyone = everyone
             deliveryDeadline = clock.now().advanced(by: budget)
-            let result = try await withTaskCancellationHandler {
+            result = try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { continuation in
                     self.continuation = continuation
                     state = .resolving
@@ -141,9 +147,9 @@ public actor VoiceCheck {
             } onCancel: {
                 Task { await self.cancel() }
             }
-            try Task.checkCancellation()
-            return result
         }
+        try Task.checkCancellation()
+        return result
     }
 
     public func cancel() {
@@ -218,14 +224,15 @@ public actor VoiceCheck {
         let result: VoiceCheckResult
         if let deadline = deliveryDeadline, clock.now() >= deadline {
             report(VoiceFilterError.deadlineExceeded)
-            result = deliver(everyone: everyone, text: everyone, outcome: .failed, learns: false)
+            result = deliver(everyone: everyone, text: everyone, outcome: .failed, learning: nil)
         } else {
             switch filtered {
             case .success(let filtered):
-                result = deliver(everyone: everyone, text: filtered.text, outcome: filtered.outcome, learns: true)
+                result = deliver(everyone: everyone, text: filtered.text, outcome: filtered.outcome,
+                                 learning: filtered.outcome.labelCount <= 1 && filtered.outcome.droppedCount == 0 ? .labelledSingleSpeaker : nil)
             case .failure(let error):
                 report(error)
-                result = deliver(everyone: everyone, text: everyone, outcome: .failed, learns: false)
+                result = deliver(everyone: everyone, text: everyone, outcome: .failed, learning: nil)
             }
         }
         timer?.cancel()
@@ -239,16 +246,22 @@ public actor VoiceCheck {
         onFailure(.filter, error)
     }
 
-    private func deliver(everyone: String, text: String, outcome: VoiceFilterOutcome, learns: Bool) -> VoiceCheckResult {
+    private func deliver(everyone: String, text: String, outcome: VoiceFilterOutcome, learning evidence: LearningEvidence?) -> VoiceCheckResult {
         let result = VoiceCheckResult(text: text, everyone: everyone, outcome: outcome,
                                      labelledReplyTime: requestedAt.map { replyTime ?? $0.duration(to: clock.now()) })
         recording = nil
         state = .delivered(result)
-        if learns {
+        if let evidence {
             learning = Task { [self] in
                 defer { learning = nil }
                 do {
-                    guard let candidate = try await watch.recording.learningCandidate() else { return }
+                    let recording = try await watch.recording
+                    let candidate: SpeakerEmbedding?
+                    switch evidence {
+                    case .coherentRecording: candidate = try await recording.learningCandidate()
+                    case .labelledSingleSpeaker: candidate = try await recording.singleSpeakerCandidate()
+                    }
+                    guard let candidate else { return }
                     try Task.checkCancellation()
                     try await store.learn(candidate, startedAt: startedAt)
                 } catch is CancellationError {
