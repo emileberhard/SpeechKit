@@ -214,12 +214,12 @@ struct VoiceFilterTests {
     }
 
     @Test func wordTimesKeepExactMillisecondsAtLongOffsets() {
-        let phrase = SpeakerPhrase(speaker: 0, text: "Mine.", words: [.milliseconds(293_149)..<.milliseconds(295_149)])
+        let phrase = SpeakerPhrase(speaker: 0, text: "Mine.", words: [.milliseconds(293_149) ..< .milliseconds(295_149)])
         let labels = VoiceFilter.labels(in: [phrase])
         #expect(labels == [SpeakerLabel(speaker: 0, speechMilliseconds: 2_000, evidence: [293_099..<295_199])])
         let invalid = SpeakerPhrase(speaker: 1, text: "Uncertain.", words: [
-            .milliseconds(-1)..<.zero,
-            .seconds(Int64.max - 1)..<.seconds(Int64.max),
+            .milliseconds(-1) ..< .zero,
+            .seconds(Int64.max - 1) ..< .seconds(Int64.max),
         ])
         #expect(VoiceFilter.labels(in: [invalid]) == [SpeakerLabel(speaker: 1, speechMilliseconds: 0, evidence: [])])
     }
