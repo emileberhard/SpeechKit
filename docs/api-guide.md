@@ -843,7 +843,7 @@ admitted. The closure returns `[SpeakerPhrase]` and runs only when requested.
 `resolve(everyone:waitingUpTo:)` takes the additional delivery budget after the
 ordinary transcript arrives and returns `VoiceCheckResult` with `text`,
 `everyone`, `outcome` and optional `labelledReplyTime`. Failures report a stage
-and `VoiceCheckFailure.underlying`; they keep everyone's text. Cancellation
+and the original error; they keep everyone's text. Cancellation
 before delivery throws `CancellationError` and prevents delivery. `cancel()`
 after delivery preserves learning, so normal session teardown is safe.
 

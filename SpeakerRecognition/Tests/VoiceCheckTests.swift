@@ -21,7 +21,7 @@ private actor Signal {
     }
 }
 
-@Suite("Voice check")
+@Suite("Voice check", .serialized)
 struct VoiceCheckTests {
     private func trustedProfile() -> VoiceProfile {
         var profile = VoiceProfile(modelVersion: SpeakerEmbedder.modelVersion, createdAt: .now)
@@ -51,8 +51,8 @@ struct VoiceCheckTests {
             await fireTimer.wait()
         })
         let check = try VoiceCheck(profile: trustedProfile(), store: store, startedAt: .now, onFailure: { _, failure in
-            if let error = failure.underlying as? VoiceFilterError { failures.withLock { $0.append(error) } }
-        }, clock: clock)
+            if let error = failure as? VoiceFilterError { failures.withLock { $0.append(error) } }
+        }, watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: trustedProfile().trustedMean), clock: clock)
         check.append(try mixedAudio())
         await check.finish {
             await requested.open()
@@ -83,6 +83,7 @@ struct VoiceCheckTests {
         let store = VoiceProfileStore(accountDirectory: directory)
         let check = try VoiceCheck(profile: trustedProfile(), store: store, startedAt: .now,
                                   onFailure: { _, _ in failures.withLock { $0 += 1 } },
+                                  watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: trustedProfile().trustedMean),
                                   clock: VoiceCheckClock(now: { .now }, sleep: { _ in
             await timerStarted.open()
             await release.wait()
@@ -122,4 +123,142 @@ struct VoiceCheckTests {
         #expect(failures.withLock { $0 } == 0)
     }
 
+    @Test(arguments: [[], [SpeakerPhrase(speaker: 0, text: "Relabelled.", words: [.zero ..< .milliseconds(100)])]])
+    func batchDoubtPreservesTheCallersOriginal(phrases: [SpeakerPhrase]) async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = VoiceProfileStore(accountDirectory: directory)
+        let result = await VoiceCheck.filter(pcm16: Data(repeating: 0, count: 32_000), phrases: phrases,
+                                            everyone: "Original transcript.", profile: trustedProfile(), store: store, startedAt: .now,
+                                            onFailure: { _, _ in Issue.record("Unexpected failure") })
+        #expect(result.text == "Original transcript." && result.everyone == "Original transcript.")
+        #expect(result.outcome.path == .keptEveryone && result.outcome.droppedCount == 0)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func filteringThroughThePublicCheckDropsAnotherSyntheticVoice() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let own = try SpeakerFixtures.speech("en-short-long-rushed")
+        let other = try SpeakerFixtures.speech("en-teen-note")
+        let embedder = try SpeakerFixtures.embedder()
+        let embedding = try await embedder.embedding(of: own)
+        var profile = VoiceProfile(modelVersion: SpeakerEmbedder.modelVersion, createdAt: .now)
+        for _ in 0..<15 { profile.learn(embedding, at: .now) }
+        let store = VoiceProfileStore(accountDirectory: directory)
+        let check = try VoiceCheck(profile: profile, store: store, startedAt: .now,
+                                  onFailure: { _, _ in Issue.record("Unexpected failure") })
+        let requested = Signal()
+        check.append(SpeakerFixtures.pcm16(own + SpeakerFixtures.silence + other + SpeakerFixtures.silence))
+        let otherStart = Duration.seconds(Double(own.count + 16_000) / 16_000)
+        let phrases = [
+            SpeakerPhrase(speaker: 0, text: "Mine.", words: [.zero ..< .seconds(Double(own.count) / 16_000)]),
+            SpeakerPhrase(speaker: 1, text: "Other.", words: [otherStart ..< otherStart + .seconds(Double(other.count) / 16_000)]),
+        ]
+        await check.finish {
+            await requested.open()
+            return phrases
+        }
+        await requested.wait()
+        let result = try await check.resolve(everyone: "Mine. Other.", waitingUpTo: .seconds(5))
+        #expect(result.text == "Mine." && result.everyone == "Mine. Other.")
+        #expect(result.outcome.path == .filtered && result.outcome.droppedCount == 1)
+        await check.cancel()
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func resolvingWithoutFinishClosesTheWatcherAndReleasesTheCheck() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = VoiceProfileStore(accountDirectory: directory)
+        var check: VoiceCheck? = try VoiceCheck(profile: await store.profile(), store: store, startedAt: .now,
+                                               onFailure: { _, _ in Issue.record("Unexpected failure") })
+        weak var released = check
+        check!.append(SpeakerFixtures.pcm16(try SpeakerFixtures.speech("en-developer-message")))
+        let result = try await check!.resolve(everyone: "Original.", waitingUpTo: .seconds(2))
+        check = nil
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while released != nil && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(result.text == "Original." && released == nil)
+        #expect(try await store.profile().candidates.count == 1)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func timeoutReleasesTheModelWhileAnUncooperativeFetchRemainsSuspended() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let requested = Signal(), timerStarted = Signal(), fireTimer = Signal(), releaseFetch = Signal()
+        let now = OSAllocatedUnfairLock(initialState: ContinuousClock.now)
+        let store = VoiceProfileStore(accountDirectory: directory)
+        let clock = VoiceCheckClock(now: { now.withLock { $0 } }, sleep: { _ in
+            await timerStarted.open()
+            await fireTimer.wait()
+        })
+        func makeCheck() async throws -> (VoiceCheck, ModelLifetime) {
+            let profile = trustedProfile()
+            let watch = VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: profile.trustedMean)
+            let check = VoiceCheck(profile: profile, store: store, startedAt: .now, onFailure: { _, _ in }, watch: watch, clock: clock)
+            check.append(try mixedAudio())
+            await check.finish {
+                await requested.open()
+                await releaseFetch.wait()
+                return []
+            }
+            return (check, ModelLifetime(model: try await watch.recording.audio.embedder))
+        }
+        var (check, model) = try await makeCheck() as (VoiceCheck?, ModelLifetime)
+        await requested.wait()
+        let resultTask = Task { [check = check!] in try await check.resolve(everyone: "Original.", waitingUpTo: .seconds(2)) }
+        await timerStarted.wait()
+        now.withLock { $0 = $0.advanced(by: .seconds(2)) }
+        await fireTimer.open()
+        let result = try await resultTask.value
+        check = nil
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !(await model.isReleased) && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await model.isReleased)
+        #expect(result.text == "Original." && result.outcome.path == .failed)
+        await releaseFetch.open()
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aCallerCancelledAtTheDeliveryBoundaryReceivesCancellation() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let requested = Signal(), timerStarted = Signal(), fireTimer = Signal(), releaseFetch = Signal()
+        let now = OSAllocatedUnfairLock(initialState: ContinuousClock.now)
+        let caller = OSAllocatedUnfairLock<Task<VoiceCheckResult, any Error>?>(initialState: nil)
+        let store = VoiceProfileStore(accountDirectory: directory)
+        let profile = trustedProfile()
+        let check = VoiceCheck(profile: profile, store: store, startedAt: .now,
+                               onFailure: { _, _ in caller.withLock { $0 }?.cancel() },
+                               watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: profile.trustedMean),
+                               clock: VoiceCheckClock(now: { now.withLock { $0 } }, sleep: { _ in
+            await timerStarted.open()
+            await fireTimer.wait()
+        }))
+        check.append(try mixedAudio())
+        await check.finish {
+            await requested.open()
+            await releaseFetch.wait()
+            return []
+        }
+        await requested.wait()
+        let resultTask = Task { try await check.resolve(everyone: "Original.", waitingUpTo: .seconds(2)) }
+        caller.withLock { $0 = resultTask }
+        await timerStarted.wait()
+        now.withLock { $0 = $0.advanced(by: .seconds(2)) }
+        await fireTimer.open()
+        await #expect(throws: CancellationError.self) { try await resultTask.value }
+        await releaseFetch.open()
+    }
+
+}
+
+private actor ModelLifetime {
+    private weak var model: SpeakerEmbedder?
+
+    init(model: SpeakerEmbedder) { self.model = model }
+
+    var isReleased: Bool { model == nil }
 }

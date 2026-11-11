@@ -1,12 +1,10 @@
 import AVFoundation
 import Foundation
-@testable import SpeechKit
+import SpeechKit
 import Testing
 @testable import SpeakerRecognition
 
 enum SpeakerFixtures {
-    static let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-
     struct Reference: Decodable {
         let modelVersion: String
         let syntheticFbankRows: [String: [Float]]
@@ -150,15 +148,17 @@ struct VoiceWatchTests {
 @Suite("Voice filter")
 struct VoiceFilterTests {
     private func phrase(_ speaker: Int, _ text: String, seconds: Double, at start: Int = 0) -> SpeakerPhrase {
-        let words = stride(from: 0, to: Int(seconds * 1_000), by: 500).map { [start + $0, 400] }
-        return SpeakerPhrase(speaker: speaker, text: text, words: words.map { .milliseconds($0[0]) ..< Duration.milliseconds($0[0] + $0[1]) })
+        let words = stride(from: 0, to: Int(seconds * 1_000), by: 500).map {
+            Duration.milliseconds(start + $0) ..< Duration.milliseconds(start + $0 + 400)
+        }
+        return SpeakerPhrase(speaker: speaker, text: text, words: words)
     }
 
     @Test func labelsMergeCloseWordsAndKeepTheLongestEvidenceFirst() {
         let labels = VoiceFilter.labels(in: [
-            SpeakerPhrase(speaker: 0, text: "a", words: [[0, 400], [500, 300]].compactMap { $0[1] > 0 ? .milliseconds($0[0]) ..< Duration.milliseconds($0[0] + $0[1]) : nil }),
-            SpeakerPhrase(speaker: 1, text: "b", words: [[900, 200]].compactMap { $0[1] > 0 ? .milliseconds($0[0]) ..< Duration.milliseconds($0[0] + $0[1]) : nil }),
-            SpeakerPhrase(speaker: 0, text: "c", words: [[2_000, 1_500], [9, -1]].compactMap { $0[1] > 0 ? .milliseconds($0[0]) ..< Duration.milliseconds($0[0] + $0[1]) : nil }),
+            SpeakerPhrase(speaker: 0, text: "a", words: [.milliseconds(0) ..< .milliseconds(400), .milliseconds(500) ..< .milliseconds(800)]),
+            SpeakerPhrase(speaker: 1, text: "b", words: [.milliseconds(900) ..< .milliseconds(1100)]),
+            SpeakerPhrase(speaker: 0, text: "c", words: [.milliseconds(2000) ..< .milliseconds(3500)]),
         ])
         #expect(labels == [
             SpeakerLabel(speaker: 0, speechMilliseconds: 2_300, evidence: [1_950..<3_550, 0..<850]),
@@ -169,7 +169,7 @@ struct VoiceFilterTests {
     }
 
     @Test func evidenceStopsAtTheModelWindow() {
-        let label = VoiceFilter.labels(in: [SpeakerPhrase(speaker: 0, text: "a", words: [[0, 6_000], [7_000, 6_000]].compactMap { $0[1] > 0 ? .milliseconds($0[0]) ..< Duration.milliseconds($0[0] + $0[1]) : nil })])[0]
+        let label = VoiceFilter.labels(in: [SpeakerPhrase(speaker: 0, text: "a", words: [.milliseconds(0) ..< .milliseconds(6000), .milliseconds(7000) ..< .milliseconds(13000)])])[0]
         #expect(label.evidence.reduce(0) { $0 + $1.count } == 10_000)
     }
 

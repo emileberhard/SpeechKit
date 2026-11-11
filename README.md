@@ -3,6 +3,7 @@
 Swift speech input and output for iOS and macOS. `SpeechKit` provides batch
 and realtime transcription, crash-safe recording, speech synthesis and playback.
 The optional `DictationLibrary` product adds an account-fenced CloudKit archive.
+The optional `SpeakerRecognition` product adds device-local speaker recognition.
 
 ## Install
 
@@ -12,7 +13,9 @@ Requires Swift 6.4, iOS 26 or macOS 26. Add this Swift package:
 .package(url: "https://github.com/emileberhard/SpeechKit.git", exact: "0.3.0")
 ```
 
-Link `SpeechKit`, and link `DictationLibrary` only if your app needs its archive.
+Link `SpeechKit`, `DictationLibrary` for its archive, and `SpeakerRecognition`
+for its on-device model and voice filtering. The recognition product is new in
+the next release; use its integration revision until that release is tagged.
 The package has no external package dependencies.
 
 ## Use
@@ -54,7 +57,7 @@ just test
 ```
 
 The commands use your selected Xcode. Hosted CI selects the version in
-`.xcode-version`, runs the offline tests on macOS and builds both products for
+`.xcode-version`, runs the offline tests on macOS and builds all products for
 iOS. Direct SwiftPM commands work too:
 
 ```bash
@@ -68,7 +71,7 @@ a separate Ubuntu job with no package checkout or build. A release superseded
 while waiting does not replace the newest release as GitHub's Latest.
 
 Default tests run offline. Live transcription and synthesis tests are opt-in,
-configured through environment variables. No credentials or audio are bundled.
+configured through environment variables. No credentials are bundled. Speaker-model tests include synthetic reference audio.
 See [integration setup](docs/api-guide.md#integration-tests) and
 [fixture provenance](SpeechKit/Tests/Transcription/Fixtures/README.md).
 
@@ -77,7 +80,8 @@ See [integration setup](docs/api-guide.md#integration-tests) and
 
 ## License and security
 
-[MIT](LICENSE). The SpeechKit name is descriptive; this license grants no right
+[MIT](LICENSE). The optional speaker model retains its
+[CC-BY-4.0 notice](SpeakerRecognition/Sources/Resources/NOTICE.md). The SpeechKit name is descriptive; this license grants no right
 to imply endorsement by its author. [PRIVACY.md](PRIVACY.md) describes data flows.
 Report vulnerabilities privately through
 [GitHub security advisories](https://github.com/emileberhard/SpeechKit/security/advisories/new).

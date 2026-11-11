@@ -41,7 +41,8 @@ credentials, personal configuration, raw provider output or recordings.
   the added wait budget and maps public failures into app diagnostics. A late
   reply cannot replace delivered text; pre-delivery cancellation prevents
   delivery, and post-delivery teardown preserves learning. Retire the store
-  before replacing an account; Forget My Voice fences earlier captures.
+  before replacing an account. Retirement and Forget My Voice revoke late
+  filtering and learning; teardown after delivery preserves learning.
   Doubt or failure keeps everyone's text. Regenerate the single committed model
   with `just speaker-model`; `scripts/check-speaker-model` checks its binary,
   conversion script and reference fixture against the committed checksum.

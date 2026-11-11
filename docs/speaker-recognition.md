@@ -199,7 +199,10 @@ The caller supplies the added wait after the ordinary transcript. A service
 that already retains audio and a second device upload have different latency
 costs. Mumla initially retains its existing 2 seconds plus 5 milliseconds per
 second of audio. Calibration changes to that policy belong to its transport.
-No threshold, profile format or initial detection rule changes in the extraction.
+The extraction preserves recognition rules and profile format. The producer
+admission cap deliberately bounds a backlog that was previously unbounded.
+Batch filtering now always preserves the caller's original text when no label
+is dropped, including empty or unjudged labelled replies.
 
 ## Verification
 
@@ -210,3 +213,9 @@ after late replies, cancellation and post-delivery learning. A reference
 inference runs through the package bundle on macOS and an iOS simulator; model
 loads, builds and device performance are separate evidence. App wire decoding
 and session integration remain consumer tests.
+
+## Release compatibility
+
+The integration release removes Azure's unused `diarization` configuration flag
+in favor of explicit speaker-attributed transcription. This is a source-breaking
+change and must appear in the release notes.

@@ -19,13 +19,11 @@ nonisolated public struct VoiceFilterOutcome: Sendable {
     public let path: Path
     public let labelCount: Int
     public let droppedCount: Int
-    public let unfilteredText: String?
 
-    static let notHeard = Self(path: .notHeard, labelCount: 0, droppedCount: 0, unfilteredText: nil)
-    static let tooLong = Self(path: .tooLong, labelCount: 0, droppedCount: 0, unfilteredText: nil)
-    public static let undecided = Self(path: .undecided, labelCount: 0, droppedCount: 0, unfilteredText: nil)
-    public static let failed = Self(path: .failed, labelCount: 0, droppedCount: 0, unfilteredText: nil)
-
+    static let notHeard = Self(path: .notHeard, labelCount: 0, droppedCount: 0)
+    static let tooLong = Self(path: .tooLong, labelCount: 0, droppedCount: 0)
+    public static let undecided = Self(path: .undecided, labelCount: 0, droppedCount: 0)
+    public static let failed = Self(path: .failed, labelCount: 0, droppedCount: 0)
 
 }
 
@@ -39,9 +37,9 @@ extension VoiceFilter {
             embeddings[label.speaker] = try await audio.embedding(of: label.evidenceSamples(sampleRate: KaldiFilterbank.sampleRate))
         }
         guard let kept = keptSpeakers(of: labels, embeddings: embeddings, profile: profile) else {
-            return (everyone, VoiceFilterOutcome(path: .keptEveryone, labelCount: labels.count, droppedCount: 0, unfilteredText: nil))
+            return (everyone, VoiceFilterOutcome(path: .keptEveryone, labelCount: labels.count, droppedCount: 0))
         }
         return (text(of: phrases, keeping: kept), VoiceFilterOutcome(path: .filtered, labelCount: labels.count,
-                                                                    droppedCount: labels.count - kept.count, unfilteredText: everyone))
+                                                                    droppedCount: labels.count - kept.count))
     }
 }
