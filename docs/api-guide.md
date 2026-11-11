@@ -829,3 +829,30 @@ changes to the library store's scheduling or file access:
 ```bash
 SPEECHKIT_BENCHMARK=1 swift test -c release -Xswiftc -enable-testing --filter PublicationBenchmark
 ```
+
+## Optional speaker recognition
+
+Add the `SpeakerRecognition` product only to targets that recognize speakers.
+`SpeakerPhrase` belongs to the core product and carries a speaker number, text
+and `[Range<Duration>]` word spans measured from the start of the audio.
+Adapters translate their wire formats before passing phrases to recognition.
+
+The live path creates `VoiceCheck(profile:store:startedAt:onFailure:)`, appends
+16 kHz mono PCM16 during capture, then calls `finish(fetch:)` after all audio is
+admitted. The closure returns `[SpeakerPhrase]` and runs only when requested.
+`resolve(everyone:waitingUpTo:)` takes the additional delivery budget after the
+ordinary transcript arrives and returns `VoiceCheckResult` with `text`,
+`everyone`, `outcome` and optional `labelledReplyTime`. Failures report a stage
+and `VoiceCheckFailure.underlying`; they keep everyone's text. Cancellation
+before delivery throws `CancellationError` and prevents delivery. `cancel()`
+after delivery preserves learning, so normal session teardown is safe.
+
+`VoiceProfileStore(accountDirectory:)` owns the local file. Apps supply an
+isolated directory per account and call `retire()` before replacing its owner.
+`forget(learnedBefore:)` fences earlier checks and learning. History replay uses
+`beginHistory()`, `VoiceHistory.learn(from:in:decode:)`, then
+`learnHistory(_:in:)`; the decoder returns 16 kHz mono PCM16 from a caller-owned
+recording. `VoiceCheck.filter(pcm16:phrases:everyone:profile:store:startedAt:onFailure:)`
+is the batch form and does not relearn replayed recordings. See the
+[speaker recognition design](speaker-recognition.md) for the rules and model
+notice.
