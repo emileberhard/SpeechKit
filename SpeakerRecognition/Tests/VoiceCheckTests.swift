@@ -50,7 +50,7 @@ struct VoiceCheckTests {
             await timerStarted.open()
             await fireTimer.wait()
         })
-        let check = try VoiceCheck(profile: trustedProfile(), store: store, startedAt: .now, onFailure: { _, failure in
+        let check = VoiceCheck(profile: trustedProfile(), store: store, startedAt: .now, onFailure: { _, failure in
             if let error = failure as? VoiceFilterError { failures.withLock { $0.append(error) } }
         }, watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: trustedProfile().trustedMean), clock: clock)
         check.append(try mixedAudio())
@@ -81,7 +81,7 @@ struct VoiceCheckTests {
         let requested = Signal(), timerStarted = Signal(), release = Signal()
         let failures = OSAllocatedUnfairLock(initialState: 0)
         let store = VoiceProfileStore(accountDirectory: directory)
-        let check = try VoiceCheck(profile: trustedProfile(), store: store, startedAt: .now,
+        let check = VoiceCheck(profile: trustedProfile(), store: store, startedAt: .now,
                                   onFailure: { _, _ in failures.withLock { $0 += 1 } },
                                   watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: trustedProfile().trustedMean),
                                   clock: VoiceCheckClock(now: { .now }, sleep: { _ in
@@ -173,7 +173,7 @@ struct VoiceCheckTests {
         let store = VoiceProfileStore(accountDirectory: directory)
         var check: VoiceCheck? = try VoiceCheck(profile: await store.profile(), store: store, startedAt: .now,
                                                onFailure: { _, _ in Issue.record("Unexpected failure") })
-        weak var released = check
+        weak let released = check
         check!.append(SpeakerFixtures.pcm16(try SpeakerFixtures.speech("en-developer-message")))
         let result = try await check!.resolve(everyone: "Original.", waitingUpTo: .seconds(2))
         check = nil
