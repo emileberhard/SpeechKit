@@ -33,6 +33,8 @@ nonisolated struct VoicedPieceSegmenter: Sendable {
         return closed
     }
 
+    var currentPiece: Range<Int>? { open.flatMap(Self.piece) }
+
     mutating func finish() -> Range<Int>? {
         defer { open = nil }
         return open.flatMap(Self.piece)
@@ -150,9 +152,15 @@ nonisolated struct VoiceListener: Sendable {
     private var segmenter = VoicedPieceSegmenter()
     private var pieces: [VoicedPiece] = []
     private var isComplete = true
+    private let profile: SpeakerEmbedding?
+    private var windows: [VoicedPiece] = []
+    private var nextWindowStart = 0
+    private static let windowSamples = 2 * KaldiFilterbank.sampleRate
+    private static let stepSamples = KaldiFilterbank.sampleRate
 
     init(embedder: SpeakerEmbedder, profile: SpeakerEmbedding?) {
         self.embedder = embedder
+        self.profile = profile
     }
 
     mutating func append(_ chunk: Data) async throws {
@@ -163,22 +171,36 @@ nonisolated struct VoiceListener: Sendable {
         }
         pcm.append(chunk)
         for piece in segmenter.append(PCM16Samples.floats(chunk)) {
+            try await appendWindows(in: piece)
             pieces.append(VoicedPiece(samples: piece, embedding: try await embedder.embedding(of: pcm.samples(in: piece))))
         }
+        if let piece = segmenter.currentPiece { try await appendWindows(in: piece) }
+    }
+
+    private mutating func appendWindows(in piece: Range<Int>) async throws {
+        var start = max(nextWindowStart, piece.lowerBound)
+        while start + Self.windowSamples <= piece.upperBound {
+            try Task.checkCancellation()
+            let range = start..<start + Self.windowSamples
+            windows.append(VoicedPiece(samples: range, embedding: try await embedder.embedding(of: pcm.samples(in: range))))
+            start += Self.stepSamples
+        }
+        nextWindowStart = start
     }
 
     mutating func exceedLimit() {
         isComplete = false
         pcm = PCM16Audio()
         pieces = []
+        windows = []
     }
 
     mutating func finish() async throws -> VoiceRecording {
-        guard isComplete else { return VoiceRecording(audio: SpeakerAudio(embedder: embedder, pcm: pcm), pieces: [], isComplete: false) }
+        guard isComplete else { return VoiceRecording(audio: SpeakerAudio(embedder: embedder, pcm: pcm), pieces: [], isComplete: false, windows: [], profile: profile) }
         if let piece = segmenter.finish() {
             pieces.append(VoicedPiece(samples: piece, embedding: try await embedder.embedding(of: pcm.samples(in: piece))))
         }
-        return VoiceRecording(audio: SpeakerAudio(embedder: embedder, pcm: pcm), pieces: pieces, isComplete: true)
+        return VoiceRecording(audio: SpeakerAudio(embedder: embedder, pcm: pcm), pieces: pieces, isComplete: true, windows: windows, profile: profile)
     }
 }
 
@@ -188,8 +210,13 @@ nonisolated struct VoiceRecording: Sendable {
     let audio: SpeakerAudio
     let pieces: [VoicedPiece]
     let isComplete: Bool
+    let windows: [VoicedPiece]
+    let profile: SpeakerEmbedding?
+    private static let profileMismatchThreshold: Float = 0.2
 
-    var otherVoiceHeard: Bool {
+    var otherVoiceHeard: Bool { Self.hearsDifferentVoices(in: pieces) }
+
+    private static func hearsDifferentVoices(in pieces: [VoicedPiece]) -> Bool {
         guard pieces.count >= 2 else { return false }
         return pieces.indices.contains { index in
             var others = pieces
@@ -201,10 +228,15 @@ nonisolated struct VoiceRecording: Sendable {
         }
     }
 
-    var requestsLabels: Bool { otherVoiceHeard }
-    var containsMixedVoices: Bool { otherVoiceHeard }
+    var requestsLabels: Bool {
+        guard let profile else { return otherVoiceHeard }
+        guard (pieces + windows).contains(where: { $0.embedding.similarity(to: profile) >= VoiceFilter.sameVoiceThreshold }) else { return false }
+        return otherVoiceHeard || windows.count(where: { $0.embedding.similarity(to: profile) < Self.profileMismatchThreshold }) >= 2
+    }
 
-    func learningCandidate() async throws -> SpeakerEmbedding? {
+    var containsMixedVoices: Bool { otherVoiceHeard || Self.hearsDifferentVoices(in: windows) }
+
+    @concurrent func learningCandidate() async throws -> SpeakerEmbedding? {
         guard isComplete, !containsMixedVoices, pieces.reduce(0, { $0 + $1.samples.count }) >= Self.minimumLearningSamples else { return nil }
         return try await audio.embedding(of: pieces.map(\.samples))
     }
@@ -246,7 +278,7 @@ nonisolated struct SpeakerAudio: Sendable {
     let embedder: SpeakerEmbedder
     let pcm: PCM16Audio
 
-    func embedding(of ranges: [Range<Int>]) async throws -> SpeakerEmbedding {
+    @concurrent func embedding(of ranges: [Range<Int>]) async throws -> SpeakerEmbedding {
         var audio: [Float] = []
         for range in ranges where audio.count < SpeakerEmbedder.windowSamples {
             audio += pcm.samples(in: range.lowerBound..<min(range.upperBound, range.lowerBound + SpeakerEmbedder.windowSamples - audio.count))

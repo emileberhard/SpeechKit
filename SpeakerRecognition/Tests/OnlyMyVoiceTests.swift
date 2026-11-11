@@ -113,6 +113,51 @@ struct VoiceWatchTests {
         #expect(pieces.dropFirst(3).map(\.count).prefix(2).allSatisfy { $0 <= 160_000 && $0 > 158_000 })
     }
 
+    @Test func aContinuousMixRequestsLabelsAgainstTheTrustedProfile() async throws {
+        let embedder = try SpeakerFixtures.embedder()
+        func voiced(_ name: String) throws -> [Float] {
+            let samples = try SpeakerFixtures.speech(name)
+            return stride(from: 0, through: samples.count - 160, by: 160).flatMap { start -> [Float] in
+                let frame = samples[start..<start + 160]
+                let rms = sqrt(frame.reduce(Float.zero) { $0 + $1 * $1 } / 160)
+                return rms > 0.02 ? frame.map { $0 * 0.1 / rms } : []
+            }
+        }
+        let mine = try voiced("en-teen-note")
+        let other = try voiced("en-landlord-email")
+        let profile = try await embedder.embedding(of: mine)
+        let mix = Array(other.prefix(64_000)) + Array(mine.prefix(48_000))
+        var listener = VoiceListener(embedder: embedder, profile: profile)
+        let pcm = SpeakerFixtures.pcm16(mix)
+        for start in stride(from: 0, to: pcm.count, by: 3_200) {
+            try await listener.append(pcm.subdata(in: start..<min(start + 3_200, pcm.count)))
+        }
+        let recording = try await listener.finish()
+        #expect(recording.pieces.count == 1)
+        #expect(recording.requestsLabels)
+        #expect(recording.containsMixedVoices)
+        #expect(try await recording.learningCandidate() == nil)
+    }
+
+    @Test func aCoherentMismatchRepairsATrustedFrozenProfile() async throws {
+        var profile = VoiceProfile(modelVersion: SpeakerEmbedder.modelVersion, createdAt: .distantPast)
+        for _ in 0..<40 { profile.learn(axis(0), at: .distantPast) }
+        #expect(profile.isTrusted && profile.isFrozen)
+        let embedder = try SpeakerFixtures.embedder()
+        let other = try SpeakerFixtures.speech("en-developer-message")
+        var listener = VoiceListener(embedder: embedder, profile: profile.trustedMean)
+        try await listener.append(SpeakerFixtures.pcm16(other))
+        let recording = try await listener.finish()
+        #expect(!recording.requestsLabels)
+        #expect(!recording.containsMixedVoices)
+        let candidate = try #require(try await recording.learningCandidate())
+        #expect(candidate.similarity(to: try #require(profile.mean)) < VoiceFilter.sameVoiceThreshold)
+        for _ in 0..<7 { profile.learn(candidate, at: .now) }
+        #expect(profile.isFrozen && !profile.isTrusted)
+        profile.learn(candidate, at: .now)
+        #expect(profile.mean == nil && !profile.isTrusted)
+    }
+
     @Test func anotherVoiceIsHeardOnlyWhenOneSpeaks() async throws {
         let modelURL = try SpeakerFixtures.modelURL()
         func watch(_ names: [String]) async throws -> VoiceRecording {
