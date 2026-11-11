@@ -26,9 +26,7 @@ nonisolated enum VoiceFilter {
     static func labels(in phrases: [SpeakerPhrase]) -> [SpeakerLabel] {
         let words = Dictionary(grouping: phrases, by: \.speaker).mapValues { phrases in
             phrases.flatMap(\.words).compactMap { word -> Range<Int>? in
-                let start = Int(word.lowerBound / .milliseconds(1))
-                let end = Int(word.upperBound / .milliseconds(1))
-                guard start >= 0, end > start else { return nil }
+                guard let start = milliseconds(word.lowerBound), let end = milliseconds(word.upperBound), end > start else { return nil }
                 return start..<end
             }
         }
@@ -74,6 +72,17 @@ nonisolated enum VoiceFilter {
             .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: " ")
+    }
+
+    private static func milliseconds(_ duration: Duration) -> Int? {
+        guard duration >= .zero else { return nil }
+        let components = duration.components
+        let seconds = components.seconds.multipliedReportingOverflow(by: 1_000)
+        guard !seconds.overflow else { return nil }
+        let total = seconds.partialValue.addingReportingOverflow(components.attoseconds / 1_000_000_000_000_000)
+        guard !total.overflow, let value = Int(exactly: total.partialValue),
+              value <= Int.max / KaldiFilterbank.sampleRate - paddingMilliseconds else { return nil }
+        return value
     }
 
     private static func merged(_ spans: [Range<Int>]) -> [Range<Int>] {

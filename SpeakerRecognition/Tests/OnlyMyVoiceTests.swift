@@ -213,6 +213,17 @@ struct VoiceFilterTests {
         #expect(labels[0].evidenceSamples(sampleRate: 16_000).first == 31_200..<56_800)
     }
 
+    @Test func wordTimesKeepExactMillisecondsAtLongOffsets() {
+        let phrase = SpeakerPhrase(speaker: 0, text: "Mine.", words: [.milliseconds(293_149)..<.milliseconds(295_149)])
+        let labels = VoiceFilter.labels(in: [phrase])
+        #expect(labels == [SpeakerLabel(speaker: 0, speechMilliseconds: 2_000, evidence: [293_099..<295_199])])
+        let invalid = SpeakerPhrase(speaker: 1, text: "Uncertain.", words: [
+            .milliseconds(-1)..<.zero,
+            .seconds(Int64.max - 1)..<.seconds(Int64.max),
+        ])
+        #expect(VoiceFilter.labels(in: [invalid]) == [SpeakerLabel(speaker: 1, speechMilliseconds: 0, evidence: [])])
+    }
+
     @Test func evidenceStopsAtTheModelWindow() {
         let label = VoiceFilter.labels(in: [SpeakerPhrase(speaker: 0, text: "a", words: [.milliseconds(0) ..< .milliseconds(6000), .milliseconds(7000) ..< .milliseconds(13000)])])[0]
         #expect(label.evidence.reduce(0) { $0 + $1.count } == 10_000)
