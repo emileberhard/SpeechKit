@@ -23,9 +23,9 @@ private actor Signal {
 
 @Suite("Voice check", .serialized)
 struct VoiceCheckTests {
-    private func trustedProfile() -> VoiceProfile {
+    private func trustedProfile() async throws -> VoiceProfile {
         var profile = VoiceProfile(modelVersion: SpeakerEmbedder.modelVersion, createdAt: .now)
-        let embedding = SpeakerEmbedding(normalizing: [1] + [Float](repeating: 0, count: 255))
+        let embedding = try await SpeakerFixtures.embedder().embedding(of: SpeakerFixtures.speech("en-teen-note"))
         for _ in 0..<15 { profile.learn(embedding, at: .now) }
         return profile
     }
@@ -36,6 +36,38 @@ struct VoiceCheckTests {
             samples += try SpeakerFixtures.speech(name) + SpeakerFixtures.silence
         }
         return SpeakerFixtures.pcm16(samples)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aSlowReplyWithinTheCallerBudgetIsKeptAndTimed() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let requested = Signal(), timerStarted = Signal(), releaseFetch = Signal(), releaseTimer = Signal()
+        let now = OSAllocatedUnfairLock(initialState: ContinuousClock.now)
+        let failures = OSAllocatedUnfairLock(initialState: 0)
+        let clock = VoiceCheckClock(now: { now.withLock { $0 } }, sleep: { _ in
+            await timerStarted.open()
+            await releaseTimer.wait()
+        })
+        let check = try VoiceCheck(profile: try await trustedProfile(), store: VoiceProfileStore(accountDirectory: directory), startedAt: .now,
+                                  onFailure: { _, _ in failures.withLock { $0 += 1 } }, watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: try await trustedProfile().trustedMean), clock: clock)
+        check.append(try mixedAudio())
+        await check.finish {
+            await requested.open()
+            await releaseFetch.wait()
+            return []
+        }
+        await requested.wait()
+        let delivery = Task { try await check.resolve(everyone: "Everyone.", waitingUpTo: .seconds(3)) }
+        await timerStarted.wait()
+        now.withLock { $0 = $0.advanced(by: .milliseconds(2_200)) }
+        await releaseFetch.open()
+        let result = try await delivery.value
+        #expect(result.text == "Everyone." && result.outcome.path == .keptEveryone)
+        #expect(result.labelledReplyTime == .milliseconds(2_200))
+        #expect(failures.withLock { $0 } == 0)
+        await releaseTimer.open()
+        await check.cancel()
     }
 
     @Test(.timeLimit(.minutes(1)))
@@ -50,9 +82,10 @@ struct VoiceCheckTests {
             await timerStarted.open()
             await fireTimer.wait()
         })
-        let check = VoiceCheck(profile: trustedProfile(), store: store, startedAt: .now, onFailure: { _, failure in
+        let profile = try await trustedProfile()
+        let check = try VoiceCheck(profile: profile, store: store, startedAt: .now, onFailure: { _, failure in
             if let error = failure as? VoiceFilterError { failures.withLock { $0.append(error) } }
-        }, watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: trustedProfile().trustedMean), clock: clock)
+        }, watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: profile.trustedMean), clock: clock)
         check.append(try mixedAudio())
         await check.finish {
             await requested.open()
@@ -81,9 +114,9 @@ struct VoiceCheckTests {
         let requested = Signal(), timerStarted = Signal(), release = Signal()
         let failures = OSAllocatedUnfairLock(initialState: 0)
         let store = VoiceProfileStore(accountDirectory: directory)
-        let check = VoiceCheck(profile: trustedProfile(), store: store, startedAt: .now,
+        let check = try VoiceCheck(profile: try await trustedProfile(), store: store, startedAt: .now,
                                   onFailure: { _, _ in failures.withLock { $0 += 1 } },
-                                  watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: trustedProfile().trustedMean),
+                                  watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: try await trustedProfile().trustedMean),
                                   clock: VoiceCheckClock(now: { .now }, sleep: { _ in
             await timerStarted.open()
             await release.wait()

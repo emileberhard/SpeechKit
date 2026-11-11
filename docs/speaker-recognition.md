@@ -45,8 +45,12 @@ of at least 1 s as it ends. Each piece costs one model call on the CPU, about
 12 calls per minute of speech, or roughly 0.4% of one core. That keeps the work
 background-safe and finished by the time the user stops.
 
-Another voice is heard when a piece scores below the same-voice threshold
-against the duration-weighted mean of all the other pieces. At stop, at most
+Pieces still detect a different voice against the duration-weighted mean of
+the other pieces at 0.35. In addition, overlapping 2 s windows of voiced audio
+are embedded every 1 s as audio arrives. A trusted profile requests labels only
+when a piece or window reaches 0.35 against the profile, and either the original
+piece detector fires or at least two windows score below 0.20. The contrast
+keeps a coherent mismatch from causing a request that cannot find an anchor. At stop, at most
 one piece is still open, so the answer normally arrives while Azure is still
 transcribing. An answer that isn't ready when the first result arrives counts
 as not heard, so the watcher can never delay delivery.
@@ -66,7 +70,10 @@ labels to keep.
 1. A label's evidence is its own speech: its word spans, padded and
    concatenated, longest first, up to the model's 10 s window, and tiled when
    shorter. The sequence retains the provider PCM for this recording.
-2. A label with under 2 s of speech is kept unjudged.
+2. A label with under 1 s of speech is kept unjudged. A label with 1–2 s
+   can anchor only at 0.50 against the profile, and can be rejected only below
+   0.25 against both references. The uncertain interval stays kept. Labels of
+   at least 2 s retain the existing 0.35 anchor and rejection bars.
 3. The **anchor** is the judged label that best matches the profile. If no
    judged label reaches the same-voice threshold against the profile,
    everything is kept: the user is not recognizably there, or diarization split
@@ -85,9 +92,9 @@ labels to keep.
    interruption can leave the turn before it without closing punctuation; that
    is accepted.
 
-One same-voice threshold, 0.35 on mean-normalized ResNet34-LM embeddings,
-serves the detector and the filter, so a voice the filter would drop is
-rarely missed by the detector; a miss keeps everyone's words. Calibration on 300 random dictations of up to 10 minutes, a
+The original 0.35 same-voice threshold on mean-normalized ResNet34-LM
+embeddings remains the long-label and piece-coherence rule. Original
+calibration on 300 random dictations of up to 10 minutes, a
 third each under 15 s, 15–60 s and over 60 s, set it:
 
 - **The user's words:** no label of the user scored below 0.519 against the
@@ -103,11 +110,112 @@ third each under 15 s, 15–60 s and over 60 s, set it:
 - **Azure splits:** 6 of 300 dictations had two labels, all the user, and every
   one was kept.
 
-It is the only tunable value besides the learning threshold. A held-out set
-recorded after this design was not collected: the margin above (0.519
+That original calibration did not collect a later held-out set: the margin above (0.519
 against 0.35), every miss keeping everyone's words, and Show Everyone
 warnings in Sentry stand in for it.
 
+
+### Recalibration on 2026-11-11
+
+The private command-line harness compiled the original engine, then linked the
+local package and replayed its real listener, learning rules and public batch
+filter. No recording, transcript, profile, recording identifier or private
+location is part of the repository. The sample comprises 67 previously screened
+recordings with cached labels, the two reported leaks, and 340 newly exported
+ordinary dictations chosen randomly from the earlier text-screened pool.
+Thirty-seven coherent ordinary recordings taught a trusted, frozen stand-in
+profile through the real learning code; the other 303 form the ordinary
+hold-out sample. These recordings predate this calibration, so this is a held-out
+recording set, not a prospective user study.
+
+Speaker assignments use the earlier corpus's enrolled reference and word-time
+overlap with its own-voice spans. Any label overlapping an own-voice span is
+conservatively counted as the user; the known placement-change recording counts
+both labels as the user. The two leak assignments come from the earlier replay.
+This preserves split and changed-microphone cases instead of defining the user's
+labels by the rejection threshold being calibrated.
+
+| Watcher rule | Ordinary hold-out flags | All ordinary flags | Verified multiple speakers among flags | Screened multi-label flags | Leaks flagged |
+| --- | --- | --- | --- | --- | --- |
+| Original piece rule | 16/303 (5.3%) | 16/340 (4.7%) | 0 | 9/20 | 1/2 |
+| Contrast, two windows below 0.05 | 24/303 (7.9%) | 26/340 (7.6%) | 0 | 9/20 | 1/2 |
+| Contrast, two windows below 0.10 | 26/303 (8.6%) | 28/340 (8.2%) | 0 | 10/20 | 2/2 |
+| **Contrast, two windows below 0.20** | **30/303 (9.9%)** | **32/340 (9.4%)** | **0/32** | **11/20** | **2/2** |
+| Contrast, two windows below 0.25 | 30/303 (9.9%) | 32/340 (9.4%) | 0/32 | 11/20 | 2/2 |
+
+Contrast requires a piece or window at least 0.35 against the profile. The
+original piece detector still suffices once that match exists; the new route
+requires two low windows. The chosen 0.20 point also catches a continuous
+2.659 s other-voice turn missed by the 0.10 point. Every ordinary flag has a
+fresh labelled spot check, all with one label; the other ordinary recordings
+are text-screened rather than independently diarized. The extra requests are
+false alarms in this sample and deliver the original text. The flag rate rises
+from the earlier roughly 6% target to about 10%; that latency trade-off is
+explicit.
+
+Nine of twenty screened multi-label recordings remain unflagged. Two have no
+profile-disparate label after the word-timed replay. The other seven hold
+0.500, 0.798, 1.159, 1.560, 1.999, 2.600 and 4.677 s of other-voice speech in
+total, but their longest continuous runs are only 0.500, 0.439, 1.159, 1.560,
+0.879, 1.120 and 1.600 s respectively. They remain fail-open interjection
+misses. Across the screened set the watcher and filter together keep twelve of
+twenty other labels; if cached labels are supplied for every recording, the
+filter alone keeps eight. Both leaks request labels and keep only their user's
+label, dropping all four other labels between them.
+
+The public filter replay covers 112 labelled recordings, including 43 ordinary
+spot checks. It drops none of 110 assigned own-voice labels, including eighteen
+with 1–2 s of speech. It rejects sixteen of twenty-four assigned other labels;
+eight remain kept. Labels under 1 s are always kept. The 0.50 short-anchor bar
+requires clear recognition of the owner; the 0.25 short-rejection bar leaves an
+uncertain interval, and requires both the profile and same-recording anchor to
+reject a label. The changed short-turn leak has a valid short anchor and all
+three other labels below both rejection bars. These results support this
+corpus's operating point, not a guarantee for every person or microphone.
+
+Profile mismatch does not veto learning. Only profile-independent piece or
+window incoherence does. The synthetic regression starts with a trusted,
+frozen wrong profile, feeds a coherent mismatching recording through the real
+listener, and proves that eight trust misses still reset it. Learning and label
+requests deliberately use different signals.
+
+Fifty-eight new paid labelled requests were made through the existing personal
+route: two leak replays, ten missing word-timed replies from the screened set,
+forty-three ordinary spot checks and three serial latency checks. All other
+labelled replies were reused. Each new request records audio length, latency
+and status privately; all 58 succeeded. The latency figures include upload and
+provider time, with concurrent batches as well as three serial requests.
+
+| Audio length | Requests | Median reply | p95 reply | Maximum |
+| --- | --- | --- | --- | --- |
+| Under 15 s | 18 | 0.865 s | 3.829 s | 3.829 s |
+| 15–60 s | 30 | 1.564 s | 2.649 s | 2.650 s |
+| 60–120 s | 7 | 1.962 s | 6.442 s | 6.442 s |
+| 120–600 s | 3 | 2.329 s | 2.905 s | 2.905 s |
+
+Overall median is 1.262 s, p95 2.905 s and maximum 6.442 s. The three serial
+checks took 3.829, 1.254 and 6.442 s, so a typical half-second response is not
+established by this run. The prior three client replies at 0.49–0.56 s and the
+2.165 s missed-deadline incident remain additional evidence. Service-journal
+and device-network tail measurements were unavailable.
+
+For the access transport that already holds the audio, the recommended caller
+budget is `min(6 s, 4 s + 5 ms per second of audio)`: 4.15 s at 30 s, 4.6 s at
+2 minutes, capped at 6 s. It covers 57/58 fresh replies and the earlier missed
+incident. The 6.442 s outlier still times out and delivers everyone; extending
+ordinary waits to chase that spike is deliberately rejected. A 2.2 s reply
+inside a caller-supplied 3 s budget is tested with an injected clock, and the
+existing timeout test verifies fail-open delivery and elapsed reporting.
+
+The signed device probe loaded and predicted from the package resource bundle
+on the test iPhone. A 121-window CPU-only run measured 24.21 ms median,
+24.93 ms p95 and 26.02 ms maximum per 2 s window. A complete 600 s continuous
+voiced-input replay produced 60 pieces and 480 windows: original processing
+used 1.511 CPU seconds, windowed processing 14.662, an added 13.151 CPU seconds
+or 2.19% of one core across the dictation. It remained inside the existing
+600 s admission bound. Windows are computed during append; finish did no
+accumulated window work. Delivery also retains its readiness check and can
+fail open without waiting for a lagging watcher.
 
 ### Embeddings
 
@@ -154,9 +262,13 @@ account's profile stays dormant while another account is signed in. Deleting
 the iOS app deletes the file; on macOS it stays in Application Support until
 Forget My Voice.
 
-- **Learning** uses dictations where no other voice was heard and there are at
-  least 5 s of speech. After delivery, one embedding of up to 10 s of speech
-  becomes a candidate.
+- **Learning** requires at least 5 s of speech and no profile-independent
+  evidence of mixed voices: neither the original piece comparison nor a window
+  compared with the pooled other windows may fall below 0.35. A mismatch with
+  the profile alone never vetoes learning. After delivery, one embedding of up
+  to 10 s of speech becomes a candidate. Trust observations run even after the
+  exemplar set freezes, so eight coherent misses in ten still reset a wrong
+  profile.
 - **Ready** requires five candidates that each reach the learning threshold
   against the mean of the other four. The learning threshold is stricter than
   the same-voice threshold, at 0.5. A candidate that fails is dropped, so one

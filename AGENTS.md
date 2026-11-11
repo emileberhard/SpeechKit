@@ -75,6 +75,11 @@ credentials, personal configuration, raw provider output or recordings.
   async function whose CPU or file work grows with an audio, image or archive
   payload; actor methods stay on their actor. Callback types run on whichever
   actor invokes them, such as the player's playback callbacks.
+- Speaker recognition separates profile contrast (whether labels are useful)
+  from profile-independent voice coherence (whether a recording may teach).
+  Coherent mismatches must still reach trust observations after exemplars freeze.
+  Callers own transport wait budgets; every attempted labelled check reports its
+  elapsed time and timeout keeps everyone's text.
 - Tests use Swift Testing and synthetic inputs. Default tests stay offline;
   optional paid suites use environment-provided router or relay access. Audio
   fixtures and diagnostics are local and ignored. Do not publish transcripts.
