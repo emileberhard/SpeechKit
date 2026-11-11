@@ -4,7 +4,7 @@ import Foundation
 import Testing
 @testable import SpeakerRecognition
 
-private enum SpeakerFixtures {
+enum SpeakerFixtures {
     static let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
     struct Reference: Decodable {

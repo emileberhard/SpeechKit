@@ -30,11 +30,7 @@ nonisolated public struct VoiceFilterOutcome: Sendable {
 }
 
 extension VoiceFilter {
-    static func deadline(forSamples samples: Int) -> Duration {
-        .seconds(2) + .milliseconds(samples * 5 / KaldiFilterbank.sampleRate)
-    }
-
-    static func apply(_ phrases: [SpeakerPhrase], everyone: String, audio: SpeakerAudio, profile: SpeakerEmbedding)
+    @concurrent static func apply(_ phrases: [SpeakerPhrase], everyone: String, audio: SpeakerAudio, profile: SpeakerEmbedding)
         async throws -> (text: String, outcome: VoiceFilterOutcome)
     {
         let labels = labels(in: phrases)

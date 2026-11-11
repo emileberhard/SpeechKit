@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 nonisolated public struct VoiceProfile: Codable, Equatable, Sendable {
     static let learningThreshold: Float = 0.5
@@ -62,6 +63,12 @@ nonisolated public struct VoiceProfile: Codable, Equatable, Sendable {
 }
 
 public actor VoiceProfileStore {
+    private struct Lifetime: Sendable {
+        var isActive = true
+        var forgottenAt: Date?
+    }
+
+    private nonisolated let lifetime = OSAllocatedUnfairLock(initialState: Lifetime())
     private let url: URL
     private var cached: VoiceProfile?
     private var forgottenAt: Date?
@@ -75,7 +82,8 @@ public actor VoiceProfileStore {
     }
 
     func learn(_ candidate: SpeakerEmbedding, startedAt: Date) throws {
-        if let forgottenAt, startedAt < forgottenAt { return }
+        try Task.checkCancellation()
+        guard isCurrent(startedAt: startedAt) else { return }
         var profile = try loaded()
         let before = profile
         profile.learn(candidate, at: .now)
@@ -105,7 +113,16 @@ public actor VoiceProfileStore {
         return profile
     }
 
+    public nonisolated func retire() {
+        lifetime.withLock { $0.isActive = false }
+    }
+
+    nonisolated func isCurrent(startedAt: Date) -> Bool {
+        lifetime.withLock { $0.isActive && startedAt >= ($0.forgottenAt ?? .distantPast) }
+    }
+
     public func forget(learnedBefore date: Date) throws {
+        lifetime.withLock { $0.forgottenAt = max($0.forgottenAt ?? date, date) }
         forgottenAt = max(forgottenAt ?? date, date)
         guard try loaded().learnedSince < date else { return }
         try discard(createdAt: date)
@@ -143,7 +160,12 @@ public actor VoiceProfileStore {
         #if os(iOS)
         options.insert(.completeFileProtectionUntilFirstUserAuthentication)
         #endif
-        try JSONEncoder().encode(profile).write(to: url, options: options)
+        let writeOptions = options
+        try lifetime.withLock { state in
+            try Task.checkCancellation()
+            guard state.isActive else { throw CancellationError() }
+            try JSONEncoder().encode(profile).write(to: url, options: writeOptions)
+        }
         var excluded = url
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
