@@ -174,10 +174,21 @@ three other labels below both rejection bars. These results support this
 corpus's operating point, not a guarantee for every person or microphone.
 
 Profile mismatch does not veto learning. Only profile-independent piece or
-window incoherence does. The synthetic regression starts with a trusted,
+window incoherence does. The window gate requires three windows below 0.43,
+calibrated separately from the 0.35 piece gate. The synthetic regression starts with a trusted,
 frozen wrong profile, feeds a coherent mismatching recording through the real
 listener, and proves that eight trust misses still reset it. Learning and label
-requests deliberately use different signals.
+requests deliberately use different signals. On 340 ordinary recordings, the
+original gate admits 206 learning candidates (60.6%). Applying the 0.35 piece
+bar to a single 2 s window admitted only 186 (54.7%): twenty extra recordings
+were withheld. All twenty have a word-timed single-speaker reply. Their 43 low
+windows contain nineteen with no provider-word overlap and twenty-four with
+some word overlap; five recordings have no word overlap in any low window.
+Thus the loss includes both non-speech and actual speech, not just a second
+voice. Requiring three windows below 0.43 admits 198 candidates (58.2%), only
+eight fewer than the original gate (2.4 percentage points), and still treats
+both leaked recordings as mixed. Twenty-four of the 32 ordinary request flags
+are also withheld from learning; the other eight may still teach.
 
 Fifty-eight new paid labelled requests were made through the existing personal
 route: two leak replays, ten missing word-timed replies from the screened set,
@@ -263,8 +274,8 @@ the iOS app deletes the file; on macOS it stays in Application Support until
 Forget My Voice.
 
 - **Learning** requires at least 5 s of speech and no profile-independent
-  evidence of mixed voices: neither the original piece comparison nor a window
-  compared with the pooled other windows may fall below 0.35. A mismatch with
+  evidence of mixed voices: the original piece comparison uses 0.35, and at least three 2 s
+  windows must score below 0.43 against the pooled other windows. A mismatch with
   the profile alone never vetoes learning. After delivery, one embedding of up
   to 10 s of speech becomes a candidate. Trust observations run even after the
   exemplar set freezes, so eight coherent misses in ten still reset a wrong

@@ -139,6 +139,20 @@ struct VoiceWatchTests {
         #expect(try await recording.learningCandidate() == nil)
     }
 
+    @Test(arguments: [1, 2])
+    func isolatedUncertainWindowsStillAllowCoherentLearning(count: Int) async throws {
+        let embedder = try SpeakerFixtures.embedder()
+        let pcm = SpeakerFixtures.pcm16(try SpeakerFixtures.speech("en-developer-message"))
+        let windows = (0..<6).map { index in
+            VoicedPiece(samples: index * 16_000..<index * 16_000 + 32_000, embedding: index < count ? axis(index + 1) : axis(0))
+        }
+        let recording = VoiceRecording(audio: SpeakerAudio(embedder: embedder, pcm: PCM16Audio(pcm)),
+                                       pieces: [VoicedPiece(samples: 0..<128_000, embedding: axis(0))], isComplete: true,
+                                       windows: windows, profile: axis(0))
+        #expect(!recording.containsMixedVoices)
+        #expect(try await recording.learningCandidate() != nil)
+    }
+
     @Test func aCoherentMismatchRepairsATrustedFrozenProfile() async throws {
         var profile = VoiceProfile(modelVersion: SpeakerEmbedder.modelVersion, createdAt: .distantPast)
         for _ in 0..<40 { profile.learn(axis(0), at: .distantPast) }

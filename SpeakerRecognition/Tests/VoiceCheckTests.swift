@@ -49,8 +49,10 @@ struct VoiceCheckTests {
             await timerStarted.open()
             await releaseTimer.wait()
         })
-        let check = try VoiceCheck(profile: try await trustedProfile(), store: VoiceProfileStore(accountDirectory: directory), startedAt: .now,
-                                  onFailure: { _, _ in failures.withLock { $0 += 1 } }, watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: try await trustedProfile().trustedMean), clock: clock)
+        let profile = try await trustedProfile()
+        let check = try VoiceCheck(profile: profile, store: VoiceProfileStore(accountDirectory: directory), startedAt: .now,
+                                  onFailure: { _, _ in failures.withLock { $0 += 1 } },
+                                  watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: profile.trustedMean), clock: clock)
         check.append(try mixedAudio())
         await check.finish {
             await requested.open()
@@ -114,9 +116,10 @@ struct VoiceCheckTests {
         let requested = Signal(), timerStarted = Signal(), release = Signal()
         let failures = OSAllocatedUnfairLock(initialState: 0)
         let store = VoiceProfileStore(accountDirectory: directory)
-        let check = try VoiceCheck(profile: try await trustedProfile(), store: store, startedAt: .now,
+        let profile = try await trustedProfile()
+        let check = try VoiceCheck(profile: profile, store: store, startedAt: .now,
                                   onFailure: { _, _ in failures.withLock { $0 += 1 } },
-                                  watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: try await trustedProfile().trustedMean),
+                                  watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: profile.trustedMean),
                                   clock: VoiceCheckClock(now: { .now }, sleep: { _ in
             await timerStarted.open()
             await release.wait()
@@ -162,7 +165,7 @@ struct VoiceCheckTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = VoiceProfileStore(accountDirectory: directory)
         let result = await VoiceCheck.filter(pcm16: Data(repeating: 0, count: 32_000), phrases: phrases,
-                                            everyone: "Original transcript.", profile: trustedProfile(), store: store, startedAt: .now,
+                                            everyone: "Original transcript.", profile: try await trustedProfile(), store: store, startedAt: .now,
                                             onFailure: { _, _ in Issue.record("Unexpected failure") })
         #expect(result.text == "Original transcript." && result.everyone == "Original transcript.")
         #expect(result.outcome.path == .keptEveryone && result.outcome.droppedCount == 0)

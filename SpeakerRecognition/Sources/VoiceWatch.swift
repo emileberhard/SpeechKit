@@ -213,18 +213,19 @@ nonisolated struct VoiceRecording: Sendable {
     let windows: [VoicedPiece]
     let profile: SpeakerEmbedding?
     private static let profileMismatchThreshold: Float = 0.2
+    private static let windowCoherenceThreshold: Float = 0.43
 
-    var otherVoiceHeard: Bool { Self.hearsDifferentVoices(in: pieces) }
+    var otherVoiceHeard: Bool { Self.incoherentCount(in: pieces, threshold: VoiceFilter.sameVoiceThreshold) > 0 }
 
-    private static func hearsDifferentVoices(in pieces: [VoicedPiece]) -> Bool {
-        guard pieces.count >= 2 else { return false }
-        return pieces.indices.contains { index in
+    private static func incoherentCount(in pieces: [VoicedPiece], threshold: Float) -> Int {
+        guard pieces.count >= 2 else { return 0 }
+        return pieces.indices.count { index in
             var others = pieces
             others.remove(at: index)
             guard let reference = SpeakerEmbedding.mean(of: others.map(\.embedding), weights: others.map { Float($0.samples.count) }) else {
                 return false
             }
-            return pieces[index].embedding.similarity(to: reference) < VoiceFilter.sameVoiceThreshold
+            return pieces[index].embedding.similarity(to: reference) < threshold
         }
     }
 
@@ -234,7 +235,7 @@ nonisolated struct VoiceRecording: Sendable {
         return otherVoiceHeard || windows.count(where: { $0.embedding.similarity(to: profile) < Self.profileMismatchThreshold }) >= 2
     }
 
-    var containsMixedVoices: Bool { otherVoiceHeard || Self.hearsDifferentVoices(in: windows) }
+    var containsMixedVoices: Bool { otherVoiceHeard || Self.incoherentCount(in: windows, threshold: Self.windowCoherenceThreshold) >= 3 }
 
     @concurrent func learningCandidate() async throws -> SpeakerEmbedding? {
         guard isComplete, !containsMixedVoices, pieces.reduce(0, { $0 + $1.samples.count }) >= Self.minimumLearningSamples else { return nil }
