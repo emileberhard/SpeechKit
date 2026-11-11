@@ -48,14 +48,12 @@ public struct AzureSpeechProviderConfiguration: Sendable {
     public let model: AzureSpeechModel
     public let apiVersion: String
     public let modelOptions: AzureSpeechModelOptions?
-    public let diarization: Bool
 
     public init(
         access: SpeechProviderAccess,
         model: AzureSpeechModel = .maiTranscribe2,
         apiVersion: String = "2025-10-15",
-        modelOptions: AzureSpeechModelOptions? = nil,
-        diarization: Bool = false
+        modelOptions: AzureSpeechModelOptions? = nil
     ) throws {
         if let modelID = model.modelID, modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw SpeechKitError.invalidConfiguration("Azure Speech model ID is empty")
@@ -70,7 +68,6 @@ public struct AzureSpeechProviderConfiguration: Sendable {
         self.model = model
         self.apiVersion = apiVersion
         self.modelOptions = modelOptions
-        self.diarization = diarization
     }
 }
 
@@ -99,6 +96,63 @@ enum AzureSpeechAPI {
     struct TranscriptionResponse: Decodable {
         struct Phrase: Decodable { let text: String }
         let combinedPhrases: [Phrase]
+    }
+
+    struct SpeakerResponse: Decodable {
+        struct Phrase: Decodable {
+            struct Word: Decodable {
+                let offsetMilliseconds: Int64
+                let durationMilliseconds: Int64
+            }
+            let speaker: Int
+            let text: String
+            let words: [Word]
+        }
+        let durationMilliseconds: Int64
+        let combinedPhrases: [TranscriptionResponse.Phrase]
+        let phrases: [Phrase]
+
+        func validatedPhrases() throws -> [SpeakerPhrase] {
+            guard durationMilliseconds > 0, !phrases.isEmpty,
+                  normalized(combinedPhrases.map(\.text)) == normalized(phrases.map(\.text)) else {
+                throw SpeechKitError.invalidResponse
+            }
+            return try phrases.map { phrase in
+                guard phrase.speaker >= 0, !phrase.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      !phrase.words.isEmpty else { throw SpeechKitError.invalidResponse }
+                var previous: Int64 = -1
+                let words = try phrase.words.map { word -> Range<Duration> in
+                    guard word.offsetMilliseconds >= 0, word.offsetMilliseconds >= previous,
+                          word.durationMilliseconds > 0,
+                          word.offsetMilliseconds <= durationMilliseconds,
+                          word.durationMilliseconds <= durationMilliseconds - word.offsetMilliseconds else {
+                        throw SpeechKitError.invalidResponse
+                    }
+                    previous = word.offsetMilliseconds
+                    return Duration.milliseconds(word.offsetMilliseconds)..<Duration.milliseconds(word.offsetMilliseconds + word.durationMilliseconds)
+                }
+                return SpeakerPhrase(speaker: phrase.speaker, text: phrase.text, words: words)
+            }
+        }
+
+        private func normalized(_ texts: [String]) -> String {
+            texts.joined(separator: " ").split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        }
+    }
+
+    static func speakerDefinition(
+        configuration: AzureSpeechProviderConfiguration,
+        request: ProgressiveTranscriptionRequest
+    ) throws -> (Definition, warnings: [String]) {
+        guard configuration.model == .maiTranscribe2 else {
+            throw SpeechKitError.invalidConfiguration("Speaker-attributed transcription requires MAI-Transcribe-2")
+        }
+        let (plain, warnings) = try definition(configuration: configuration, request: request)
+        return (Definition(
+            enhancedMode: .init(model: configuration.model.modelID, task: nil, prompt: nil,
+                                modelOptions: .init(transcribeStyle: configuration.modelOptions?.transcribeStyle, timestamps: .word)),
+            phraseList: plain.phraseList, locales: plain.locales, diarization: .init()
+        ), warnings)
     }
 
     static func definition(
@@ -149,7 +203,7 @@ enum AzureSpeechAPI {
                 enhancedMode: enhanced,
                 phraseList: phrases.isEmpty ? nil : .init(phrases: phrases),
                 locales: hints.isEmpty || ignoredHints ? nil : hints,
-                diarization: configuration.diarization ? .init() : nil
+                diarization: nil
             ),
             warnings
         )

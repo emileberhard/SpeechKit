@@ -3,6 +3,45 @@ import Testing
 @testable import SpeechKit
 
 struct AzureSpeechTests {
+    @Test func speakerAttributionRequestsBothLabelsAndWordTimes() throws {
+        let (definition, _) = try AzureSpeechAPI.speakerDefinition(
+            configuration: configuration(modelOptions: .init(transcribeStyle: .clean, timestamps: AzureSpeechModelOptions.Timestamps.none)),
+            request: .init(languageHints: ["sv"], customVocabulary: ["SpeechKit"])
+        )
+        #expect(definition.diarization != nil)
+        #expect(definition.enhancedMode?.modelOptions?.timestamps == .word)
+        #expect(definition.enhancedMode?.modelOptions?.transcribeStyle == .clean)
+        #expect(definition.locales == ["sv"])
+        #expect(definition.phraseList?.phrases == ["SpeechKit"])
+        let (ordinary, _) = try AzureSpeechAPI.definition(configuration: configuration(), request: .init())
+        #expect(ordinary.diarization == nil)
+    }
+
+    @Test func speakerReplyDecodesTypedTimesWithoutLosingPhrases() throws {
+        let data = Data(#"{"durationMilliseconds":3000,"combinedPhrases":[{"text":"Keep this. Background."}],"phrases":[{"speaker":0,"text":"Keep this.","words":[{"offsetMilliseconds":100,"durationMilliseconds":400},{"offsetMilliseconds":600,"durationMilliseconds":500}]},{"speaker":1,"text":"Background.","words":[{"offsetMilliseconds":1800,"durationMilliseconds":600}]}]}"#.utf8)
+        let phrases = try JSONDecoder().decode(AzureSpeechAPI.SpeakerResponse.self, from: data).validatedPhrases()
+        #expect(phrases == [
+            SpeakerPhrase(speaker: 0, text: "Keep this.", words: [.milliseconds(100)..<Duration.milliseconds(500), .milliseconds(600)..<Duration.milliseconds(1100)]),
+            SpeakerPhrase(speaker: 1, text: "Background.", words: [.milliseconds(1800)..<Duration.milliseconds(2400)])
+        ])
+    }
+
+    @Test(arguments: [
+        #"{"speaker":-1,"text":"Keep this.","words":[{"offsetMilliseconds":0,"durationMilliseconds":100}]}"#,
+        #"{"speaker":0,"text":"Keep this.","words":[]}"#,
+        #"{"speaker":0,"text":"Keep this.","words":[{"offsetMilliseconds":-1,"durationMilliseconds":100}]}"#,
+        #"{"speaker":0,"text":"Keep this.","words":[{"offsetMilliseconds":0,"durationMilliseconds":0}]}"#,
+        #"{"speaker":0,"text":"Keep this.","words":[{"offsetMilliseconds":900,"durationMilliseconds":101}]}"#,
+        #"{"speaker":0,"text":"Keep this.","words":[{"offsetMilliseconds":9223372036854775807,"durationMilliseconds":1}]}"#,
+        #"{"speaker":0,"text":"Partial.","words":[{"offsetMilliseconds":0,"durationMilliseconds":100}]}"#
+    ])
+    func malformedAttributionFailsRatherThanDroppingWords(phrase: String) throws {
+        let data = Data("{\"durationMilliseconds\":1000,\"combinedPhrases\":[{\"text\":\"Keep this.\"}],\"phrases\":[\(phrase)]}".utf8)
+        #expect(throws: SpeechKitError.self) {
+            try JSONDecoder().decode(AzureSpeechAPI.SpeakerResponse.self, from: data).validatedPhrases()
+        }
+    }
+
     @Test(arguments: [50, 51, 57])
     func mai2BoundsProviderContextWithoutChangingTheCanonicalDictionary(count: Int) throws {
         let vocabulary = (1...count).map { "ProjectTerm\($0)" }

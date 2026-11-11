@@ -5,6 +5,20 @@ import Testing
 @Suite(.timeLimit(.minutes(1)))
 struct AzureSpeechIntegrationTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["RUN_TRANSCRIPTION_INTEGRATION_TESTS"] == "1"))
+    func mai2ReturnsSpeakerPhrasesThroughConfiguredAccess() async throws {
+        let provider = AzureSpeechTranscriptionProvider(configuration: try .init(
+            access: IntegrationAccess.provider("azure"), modelOptions: .init(transcribeStyle: .clean)
+        ))
+        let pcm = try FixtureAudio.pcm16("clip5_realtime_dictation_en.mp3", sampleRate: 16_000)
+        let audio = try TranscriptionAudio(data: PCM16WAVFile.data(pcmData: pcm, sampleRate: 16_000),
+                                         fileName: "fixture.wav", mimeType: "audio/wav", fileExtension: "wav")
+        let phrases = try await provider.transcribeSpeakers(.init(audio: audio, languageHints: ["en"], customVocabulary: ["SpeechKit", "recording"]))
+        try assertAnchors(phrases.map(\.text).joined(separator: " "))
+        #expect(!phrases.isEmpty)
+        #expect(phrases.allSatisfy { $0.speaker >= 0 && !$0.words.isEmpty })
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["RUN_TRANSCRIPTION_INTEGRATION_TESTS"] == "1"))
     func mai2AcceptsCompletedAndProgressiveAudio() async throws {
         let provider = AzureSpeechTranscriptionProvider(configuration: try .init(
             access: IntegrationAccess.provider("azure"), modelOptions: .init(transcribeStyle: .clean)

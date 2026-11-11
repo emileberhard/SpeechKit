@@ -13,29 +13,44 @@ public struct AzureSpeechTranscriptionProvider: ProgressiveTranscriptionProvider
     }
 
     @concurrent public func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
-        let options = ProgressiveTranscriptionRequest(
+        let prepared = try prepare(ProgressiveTranscriptionRequest(
             languageHints: request.languageHints,
             customVocabulary: request.customVocabulary,
             instructions: request.instructions
-        )
-        let fileExtension = request.audio.fileExtension.lowercased()
+        ))
+        let (data, response) = try await upload(request.audio, prepared: prepared)
+        return try decode(data, response: response, warnings: prepared.warnings)
+    }
+
+    @concurrent public func transcribeSpeakers(_ request: TranscriptionRequest) async throws -> [SpeakerPhrase] {
+        let definition = try AzureSpeechAPI.speakerDefinition(configuration: configuration, request: .init(
+            languageHints: request.languageHints, customVocabulary: request.customVocabulary, instructions: request.instructions
+        ))
+        let prepared = try prepare(definition)
+        let (data, response) = try await upload(request.audio, prepared: prepared)
+        guard (200..<300).contains(response.statusCode) else { throw failure(for: response) }
+        return try JSONDecoder().decode(AzureSpeechAPI.SpeakerResponse.self, from: data).validatedPhrases()
+    }
+
+    private func upload(_ audio: TranscriptionAudio, prepared: (multipart: MultipartFormDataBuilder, boundary: String, warnings: [String]))
+        async throws -> (Data, HTTPURLResponse) {
+        let fileExtension = audio.fileExtension.lowercased()
         guard ["wav", "mp3", "flac"].contains(fileExtension),
-              request.audio.data.count <= AzureSpeechAPI.maximumAudioBytes else {
+              audio.data.count <= AzureSpeechAPI.maximumAudioBytes else {
             throw SpeechKitError.invalidRequest("Azure Speech audio must be WAV, MP3, or FLAC smaller than 250 MB")
         }
-        let prepared = try prepare(options)
         var multipart = prepared.multipart
         multipart.addFile(
             name: "audio", fileName: "recording.\(fileExtension)",
             mimeType: fileExtension == "mp3" ? "audio/mpeg" : "audio/\(fileExtension)",
-            data: request.audio.data
+            data: audio.data
         )
         multipart.finalize()
         var urlRequest = try makeRequest(boundary: prepared.boundary)
         urlRequest.httpBody = multipart.build()
         let (data, response) = try await session.data(for: urlRequest)
         guard let response = response as? HTTPURLResponse else { throw SpeechKitError.invalidResponse }
-        return try decode(data, response: response, warnings: prepared.warnings)
+        return (data, response)
     }
 
     public func startProgressiveTranscription(
@@ -65,11 +80,17 @@ public struct AzureSpeechTranscriptionProvider: ProgressiveTranscriptionProvider
         multipart: MultipartFormDataBuilder, boundary: String, warnings: [String]
     ) {
         let (definition, warnings) = try AzureSpeechAPI.definition(configuration: configuration, request: request)
-        let data = try JSONEncoder().encode(definition)
+        return try prepare((definition, warnings))
+    }
+
+    private func prepare(_ definition: (AzureSpeechAPI.Definition, warnings: [String])) throws -> (
+        multipart: MultipartFormDataBuilder, boundary: String, warnings: [String]
+    ) {
+        let data = try JSONEncoder().encode(definition.0)
         let boundary = UUID().uuidString
         var multipart = MultipartFormDataBuilder(boundary: boundary)
         multipart.addField(name: "definition", value: String(decoding: data, as: UTF8.self))
-        return (multipart, boundary, warnings)
+        return (multipart, boundary, definition.warnings)
     }
 
     private func makeRequest(boundary: String) throws -> URLRequest {

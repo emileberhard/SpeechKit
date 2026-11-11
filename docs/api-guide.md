@@ -77,6 +77,18 @@ it never changes the caller's canonical dictionary. The live regression includes
 The router (`/vendors/azure-speech`) or the relay owns the Azure resource
 endpoint and key; no Azure credentials reach the app.
 
+For MAI-Transcribe-2 speaker attribution, call
+`try await provider.transcribeSpeakers(request)` with a `TranscriptionRequest`.
+It explicitly requests diarization and word timestamps and returns
+`[SpeakerPhrase]`: anonymous integer labels, phrase text and word ranges measured
+as `Duration` from the audio start. It preserves the configured transcript style,
+language hints and compatible dictionary terms. Ordinary transcription never
+enables diarization. Attribution rejects missing labels or word times, invalid
+timing ranges and incomplete phrase text rather than returning a partial
+transcript. Callers that use attribution as an optional check must keep their
+original transcript on failure. The removed configuration Boolean is replaced
+by this explicit operation; other Azure models continue using ordinary transcription.
+
 The default REST API version is `2025-10-15`. MAI-Transcribe-2 remains a preview
 model. Progressive WAV uses the unknown-length convention verified against this
 API; future models and other endpoints need their own compatibility test.
@@ -590,7 +602,7 @@ part of the public API.
 ## Provider Configs
 
 - `OpenAIProviderConfiguration(access:model:)`
-- `AzureSpeechProviderConfiguration(access:model:apiVersion:modelOptions:diarization:)`
+- `AzureSpeechProviderConfiguration(access:model:apiVersion:modelOptions:)`
 - `AssemblyAIProviderConfiguration(access:pollInterval:speechModels:)`
 - `AssemblyAIRealtimeSessionConfiguration(access:modelID:keyterms:languageHints:prompt:mode:)`
 - `ElevenLabsProviderConfiguration(access:)`
