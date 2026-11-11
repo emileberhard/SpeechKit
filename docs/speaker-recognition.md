@@ -163,8 +163,8 @@ twenty other labels; if cached labels are supplied for every recording, the
 filter alone keeps eight. Both leaks request labels and keep only their user's
 label, dropping all four other labels between them.
 
-The public filter replay covers 112 labelled recordings, including 43 ordinary
-spot checks. It drops none of 110 assigned own-voice labels, including eighteen
+The public filter replay covers 121 labelled recordings, including 52 ordinary
+spot checks. It drops none of 119 assigned own-voice labels, including eighteen
 with 1–2 s of speech. It rejects sixteen of twenty-four assigned other labels;
 eight remain kept. Labels under 1 s are always kept. The 0.50 short-anchor bar
 requires clear recognition of the owner; the 0.25 short-rejection bar leaves an

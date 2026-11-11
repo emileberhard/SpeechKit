@@ -93,7 +93,7 @@ struct VoiceCheckTests {
         let requested = Signal()
         var check: VoiceCheck? = try VoiceCheck(profile: before, store: store, startedAt: .now,
                                                onFailure: { _, _ in Issue.record("Unexpected failure") })
-        weak var released = check
+        weak let released = check
         check!.append(SpeakerFixtures.pcm16(samples))
         await check!.finish {
             await requested.open()
