@@ -1,0 +1,78 @@
+[
+  {
+    "metadataOutputVersion" : "3.0",
+    "storagePrecision" : "Mixed (Float16, Palettized (8 bits), UInt8)",
+    "outputSchema" : [
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Float16",
+        "formattedType" : "MultiArray (Float16 1 × 256)",
+        "shortDescription" : "",
+        "shape" : "[1, 256]",
+        "name" : "embedding",
+        "type" : "MultiArray"
+      }
+    ],
+    "version" : "wespeaker-voxceleb-resnet34-LM-f0c48c2-pal8",
+    "modelParameters" : [
+
+    ],
+    "author" : "WeSpeaker ResNet34-LM (CC BY 4.0), converted and 8-bit palettized for Mumla",
+    "specificationVersion" : 10,
+    "license" : "CC BY 4.0",
+    "mlProgramOperationTypeHistogram" : {
+      "Ios18.square" : 1,
+      "Ios19.sub" : 2,
+      "Ios18.conv" : 36,
+      "Ios18.linear" : 1,
+      "Ios18.relu" : 33,
+      "Ios19.concat" : 1,
+      "Ios19.add" : 17,
+      "Ios19.transpose" : 1,
+      "Ios16.reduceMean" : 4,
+      "Ios19.expandDims" : 1,
+      "Ios18.cast" : 1,
+      "Ios19.constexprLutToDense" : 35,
+      "Ios19.reshape" : 2,
+      "Ios19.mul" : 1,
+      "Ios18.sqrt" : 1
+    },
+    "computePrecision" : "Mixed (Float16, Int32)",
+    "stateSchema" : [
+
+    ],
+    "isUpdatable" : "0",
+    "availability" : {
+      "macOS" : "16.0",
+      "tvOS" : "19.0",
+      "visionOS" : "3.0",
+      "watchOS" : "12.0",
+      "iOS" : "19.0",
+      "macCatalyst" : "19.0"
+    },
+    "modelType" : {
+      "name" : "MLModelType_mlProgram"
+    },
+    "inputSchema" : [
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Float32",
+        "formattedType" : "MultiArray (Float32 1 × 998 × 80)",
+        "shortDescription" : "",
+        "shape" : "[1, 998, 80]",
+        "name" : "features",
+        "type" : "MultiArray"
+      }
+    ],
+    "userDefinedMetadata" : {
+      "com.github.apple.coremltools.conversion_date" : "2026-11-06",
+      "com.github.apple.coremltools.source" : "torch==2.7.1",
+      "com.github.apple.coremltools.version" : "9.0",
+      "com.github.apple.coremltools.source_dialect" : "TorchScript"
+    },
+    "generatedClassName" : "SpeakerModel",
+    "method" : "predict"
+  }
+]

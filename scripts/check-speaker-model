@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+import hashlib
+import sys
+from pathlib import Path
+
+root = Path(__file__).resolve().parents[1]
+model = root / "SpeakerRecognition/Sources/Resources/SpeakerModel.mlmodelc"
+paths = sorted(path for path in model.rglob("*") if path.is_file())
+paths += [root / "scripts/convert-speaker-model", root / "SpeakerRecognition/Tests/Fixtures/SpeakerModelReference.json"]
+manifest = "".join(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root)}\n" for path in paths)
+checksum = root / "scripts/SpeakerModel.sha256"
+if sys.argv[1:] == ["--write"]:
+    checksum.write_text(manifest)
+elif sys.argv[1:] or not checksum.exists() or checksum.read_text() != manifest:
+    sys.exit("Speaker model, converter or reference differs from scripts/SpeakerModel.sha256; regenerate with scripts/convert-speaker-model")
+else:
+    print("Speaker model, converter and reference checksums match")

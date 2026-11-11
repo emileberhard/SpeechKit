@@ -1,0 +1,172 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12,<3.13"
+# dependencies = [
+#   "coremltools==9.0",
+#   "numpy==2.2.6",
+#   "pyyaml==6.0.2",
+#   "scikit-learn==1.9.1",
+#   "soundfile==0.13.1",
+#   "scipy==1.15.3",
+#   "torch==2.7.1",
+#   "torchaudio==2.7.1",
+# ]
+# [tool.uv]
+# exclude-newer = "2026-11-05T12:00:00Z"
+# ///
+"""Convert WeSpeaker ResNet34-LM to the Core ML model SpeakerRecognition bundles, and write its reference fixture."""
+import hashlib
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+import types
+import urllib.request
+from pathlib import Path
+
+import coremltools as ct
+import coremltools.optimize.coreml as cto
+import numpy as np
+import soundfile as sf
+import torch
+import torch.nn as nn
+import torchaudio.compliance.kaldi as kaldi
+import yaml
+from scipy.signal import resample_poly
+
+ROOT = Path(__file__).resolve().parents[1]
+MODEL = ROOT / ".local/SpeakerModel.mlpackage"
+COMPILED = ROOT / "SpeakerRecognition/Sources/Resources/SpeakerModel.mlmodelc"
+DIGEST = ROOT / "scripts/SpeakerModel.sha256"
+FIXTURE = ROOT / "SpeakerRecognition/Tests/Fixtures/SpeakerModelReference.json"
+SPEECH = ROOT / "SpeakerRecognition/Tests/Fixtures"
+WEIGHTS = "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM/resolve/f0c48c298fd835726c27956a5d617bad7115627e/"
+SOURCE = "https://raw.githubusercontent.com/wenet-e2e/wespeaker/9fecd6cb4f47475d01761d87c826298dff4ef18c/wespeaker/models/"
+PINNED = {
+    WEIGHTS + "avg_model": "9872b375f2c6a3851ca471cbbf59e06efd23a627d78bf5872e1f0269fd298449",
+    WEIGHTS + "config.yaml": "3cf7d3243464cd939083e29d2be65c2abcdd954c1a64559bad73b74ffdb0db3e",
+    SOURCE + "resnet.py": "4bce03248d64b1aa52972effc4f239027ef63e7e8ac9ddd6f3f46265e20b3bc0",
+    SOURCE + "pooling_layers.py": "0482b9de52983a7ad3fd2d76dfebd001a4c5ee7e6c3418eb017352d5d1a85b50",
+    SOURCE + "multi_view_attention.py": "a103182ea46ca3fcab807d7e6dda73bd9e5fa39466e37d7a7c22577f878e95ef",
+}
+SAMPLE_RATE = 16_000
+WINDOW = 10 * SAMPLE_RATE
+FRAMES = 998
+
+
+def fetch(url: str, directory: Path) -> Path:
+    path = directory / url.rsplit("/", 1)[1]
+    with urllib.request.urlopen(url, timeout=120) as response:
+        path.write_bytes(response.read())
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if digest != PINNED[url]:
+        sys.exit(f"{url}: SHA-256 {digest} does not match the pinned {PINNED[url]}")
+    return path
+
+
+def fbank(samples: np.ndarray) -> torch.Tensor:
+    waveform = torch.from_numpy(np.ascontiguousarray(samples, dtype=np.float32)).unsqueeze(0) * (1 << 15)
+    return kaldi.fbank(waveform, num_mel_bins=80, frame_length=25, frame_shift=10, dither=0.0,
+                       sample_frequency=SAMPLE_RATE, window_type="hamming", use_energy=False)
+
+
+def tiled(samples: np.ndarray) -> np.ndarray:
+    return np.tile(samples, -(-WINDOW // len(samples)))[:WINDOW]
+
+
+def synthetic_signal() -> np.ndarray:
+    n = np.arange(SAMPLE_RATE, dtype=np.float64)
+    noise = ((n * 7919) % 1000) / 1000 - 0.5
+    signal = 0.3 * np.sin(2 * np.pi * 220 * n / SAMPLE_RATE) + 0.2 * np.sin(2 * np.pi * 1375 * n / SAMPLE_RATE + 0.5) + 0.05 * noise
+    return signal.astype(np.float32)
+
+
+def speech(name: str) -> np.ndarray:
+    samples, rate = sf.read(SPEECH / f"{name}.wav", dtype="float32")
+    return resample_poly(samples, 2, 3).astype(np.float32) if rate == 24_000 else samples
+
+
+class Embedder(nn.Module):
+    def __init__(self, model: nn.Module):
+        super().__init__()
+        self.model = model
+
+    def forward(self, features):
+        return self.model(features - features.mean(dim=1, keepdim=True))[-1]
+
+
+def load(directory: Path) -> nn.Module:
+    package = directory / "wespeaker"
+    (package / "models").mkdir(parents=True)
+    for name in ("resnet.py", "pooling_layers.py", "multi_view_attention.py"):
+        shutil.copy(fetch(SOURCE + name, directory), package / "models" / name)
+    module = types.ModuleType("wespeaker")
+    module.__path__ = [str(package)]
+    sys.modules["wespeaker"] = module
+    import wespeaker.models.resnet as resnet
+
+    config = yaml.safe_load(fetch(WEIGHTS + "config.yaml", directory).read_text())
+    arguments = dict(config["model_args"])
+    model = resnet.ResNet34(pooling_func=arguments.pop("pooling_func"), **arguments)
+    state = torch.load(fetch(WEIGHTS + "avg_model", directory), map_location="cpu", weights_only=True)
+    model.load_state_dict({key: value for key, value in state.items() if not key.startswith("projection")}, strict=True)
+    return Embedder(model.eval()).eval()
+
+
+def normalized(vector) -> np.ndarray:
+    vector = np.asarray(vector, dtype=np.float64).reshape(-1)
+    return vector / np.linalg.norm(vector)
+
+
+def main():
+    with tempfile.TemporaryDirectory() as temporary:
+        embedder = load(Path(temporary))
+        torch.set_num_threads(4)
+        MODEL.parent.mkdir(parents=True, exist_ok=True)
+        example = fbank(tiled(speech("en-short-technical"))).unsqueeze(0)
+        assert tuple(example.shape) == (1, FRAMES, 80), example.shape
+        traced = torch.jit.trace(embedder, example, strict=False)
+        program = ct.convert(
+            traced, inputs=[ct.TensorType(name="features", shape=(1, FRAMES, 80), dtype=np.float32)],
+            outputs=[ct.TensorType(name="embedding")], convert_to="mlprogram",
+            compute_precision=ct.precision.FLOAT16, minimum_deployment_target=ct.target.iOS26,
+            compute_units=ct.ComputeUnit.CPU_ONLY,
+        )
+        program = cto.palettize_weights(program, cto.OptimizationConfig(global_config=cto.OpPalettizerConfig(mode="kmeans", nbits=8)))
+        program.author = "WeSpeaker ResNet34-LM (CC BY 4.0), converted and 8-bit palettized for Mumla"
+        program.license = "CC BY 4.0"
+        program.version = "wespeaker-voxceleb-resnet34-LM-f0c48c2-pal8"
+        if MODEL.exists():
+            shutil.rmtree(MODEL)
+        program.save(str(MODEL))
+
+    reference = {}
+    worst = 1.0
+    for name in ("en-short-technical", "en-developer-message", "en-short-long-rushed", "sv-teen-note"):
+        features = fbank(tiled(speech(name)[:WINDOW])).unsqueeze(0)
+        with torch.no_grad():
+            expected = normalized(embedder(features)[0].numpy())
+        produced = normalized(program.predict({"features": features.numpy()})["embedding"])
+        worst = min(worst, float(expected @ produced))
+        reference[name] = [round(float(value), 6) for value in expected]
+    print(f"Core ML against PyTorch: lowest cosine {worst:.5f}")
+    if worst < 0.999:
+        sys.exit("The converted model drifted from the reference")
+
+    synthetic = fbank(synthetic_signal())
+    FIXTURE.write_text(json.dumps({
+        "modelVersion": program.version,
+        "syntheticFbankRows": {str(row): [round(float(value), 4) for value in synthetic[row]] for row in (0, 1, 48, 97)},
+        "syntheticFbankFrameCount": int(synthetic.shape[0]),
+        "embeddings": reference,
+    }, indent=1) + "\n")
+    if COMPILED.exists():
+        shutil.rmtree(COMPILED)
+    subprocess.run(["xcrun", "coremlcompiler", "compile", str(MODEL), str(COMPILED.parent)], check=True)
+    subprocess.run([str(ROOT / "scripts/check-speaker-model"), "--write"], check=True)
+    print("Wrote the compiled model, checksum and reference fixture")
+
+
+if __name__ == "__main__":
+    main()

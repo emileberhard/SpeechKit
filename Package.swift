@@ -14,9 +14,12 @@ let package = Package(
             name: "SpeechKit",
             targets: ["SpeechKit"]
         ),
-        .library(name: "DictationLibrary", targets: ["DictationLibrary"])
+        .library(name: "DictationLibrary", targets: ["DictationLibrary"]),
+        .library(name: "SpeakerRecognition", targets: ["SpeakerRecognition"])
     ],
     targets: [
+        .target(name: "SpeakerRecognition", dependencies: ["SpeechKit"], path: "SpeakerRecognition/Sources", resources: [.copy("Resources/SpeakerModel.mlmodelc"), .copy("Resources/CC-BY-4.0.txt"), .copy("Resources/NOTICE.md")], swiftSettings: swiftSettings),
+        .testTarget(name: "SpeakerRecognitionTests", dependencies: ["SpeakerRecognition"], path: "SpeakerRecognition/Tests", resources: [.process("Fixtures")], swiftSettings: swiftSettings),
         .target(name: "DictationLibrary", dependencies: ["SpeechKit"], path: "DictationLibrary/Sources", swiftSettings: swiftSettings),
         .testTarget(name: "DictationLibraryTests", dependencies: ["DictationLibrary"], path: "DictationLibrary/Tests", swiftSettings: swiftSettings),
         .target(

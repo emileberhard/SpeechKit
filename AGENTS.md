@@ -1,7 +1,7 @@
 # SpeechKit
 
-A public SwiftPM library with two products: `SpeechKit` and optional
-`DictationLibrary`. It targets iOS 26 and macOS 26 with Swift 6.4.
+A public SwiftPM library with three products: `SpeechKit`, optional
+`DictationLibrary` and optional `SpeakerRecognition`. It targets iOS 26 and macOS 26 with Swift 6.4.
 
 ## Ownership
 
@@ -12,7 +12,8 @@ A public SwiftPM library with two products: `SpeechKit` and optional
 | `SpeechKit/Sources/Synthesis` | Typed synthesis providers, streaming and playback |
 | `SpeechKit/Sources/Shared/Networking` | Router/relay access, URLSession factory and bounded transports |
 | `DictationLibrary/Sources` | Account-fenced capture, CloudKit publication and explicit archive replication |
-| `SpeechKit/Tests`, `DictationLibrary/Tests` | Offline Swift Testing suites and opt-in live provider tests |
+| `SpeakerRecognition/Sources` | Device-local speaker model, watcher, label filtering, profile store and history replay |
+| `SpeechKit/Tests`, `DictationLibrary/Tests`, `SpeakerRecognition/Tests` | Offline Swift Testing suites and opt-in live provider tests |
 | `.github/workflows`, `.xcode-version` | Hosted CI, release admission, publication and CI toolchain |
 
 ## Commands
@@ -20,9 +21,9 @@ A public SwiftPM library with two products: `SpeechKit` and optional
 | Command | Purpose |
 | --- | --- |
 | `just` | List commands |
-| `just build` | Build both products for macOS with SwiftPM |
+| `just build` | Build all products for macOS with SwiftPM |
 | `just test` | Run offline tests (`swift test --jobs 4`) |
-| `just build-ios` | Compile both products for generic iOS without signing |
+| `just build-ios` | Compile all products for generic iOS without signing |
 
 Local commands use the selected Xcode. CI selects `.xcode-version` through
 `scripts/select-xcode`. Put local diagnostics in ignored `.local/`; never commit
@@ -32,6 +33,13 @@ credentials, personal configuration, raw provider output or recordings.
 
 - Transcription and synthesis are sibling capabilities. Provider adapters own
   wire formats, limits and finalization; core APIs remain provider-neutral.
+- `SpeakerRecognition` owns recognition policy and its compiled model. Apps own
+  settings, account isolation, profile directory, diagnostics and history decoding.
+  Word timing in core `SpeakerPhrase` is typed from the audio start; adapters
+  translate wire formats. Profiles never leave the caller's isolated directory.
+  Doubt or failure keeps everyone's text. Regenerate the single committed model
+  with `just speaker-model`; `scripts/check-speaker-model` checks its binary,
+  conversion script and reference fixture against the committed checksum.
 - `SpeechProviderAccess` owns credential placement. All requests use its router
   or caller-owned relay and the shared URLSession factory. No personal endpoint,
   provider credential or key-file path belongs in the package.

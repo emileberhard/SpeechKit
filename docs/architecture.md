@@ -118,3 +118,25 @@ This assumes source distribution remains the only release artifact. Adding a
 binary product would require CI and an unprivileged build stage to prove that
 artifact before publication. Tags remain immutable, and consumers control their
 pins; a library release neither upgrades nor deploys a consuming app.
+
+## Speaker recognition
+
+`SpeakerRecognition` is an optional product depending on `SpeechKit` only for
+`SpeakerPhrase`. It owns the WeSpeaker model and conversion, filterbank,
+watcher, filtering thresholds, profile learning and its local file store, and
+history replay. Apps supply the isolated account directory and decode history
+to 16 kHz mono PCM16. They own settings, synchronization, diagnostics and
+where unfiltered text is retained. The model loads through `Bundle.module`;
+its compiled resource is copied unchanged so SwiftPM never compiles an
+mlpackage in its build sandbox. Its CC-BY-4.0 notice travels in the resource
+bundle. The core phrase carries speaker, text and word spans from audio start;
+provider wire representations stay at their boundaries.
+
+A separate product keeps the model out of consumers that need only speech
+transport. Copying the engine into each app would give calibration and model
+versions multiple owners; placing it in the core would add its model to every
+consumer. A separate repository has no present benefit over a target. Profile
+encoding and model version remain unchanged so existing installations keep
+their learned voice. The extraction preserves rules and thresholds; calibration
+changes are separate work. See [speaker recognition](speaker-recognition.md)
+for model provenance, rules and calibration.
