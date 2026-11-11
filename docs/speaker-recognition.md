@@ -330,10 +330,10 @@ Forget My Voice.
 
 The caller supplies the added wait after the ordinary transcript. A service
 that already retains audio and a second device upload have different latency
-costs. Mumla initially retains its existing 2 seconds plus 5 milliseconds per
-second of audio. Calibration changes to that policy belong to its transport.
-The extraction preserves recognition rules and profile format. The producer
-admission cap deliberately bounds a backlog that was previously unbounded.
+costs. The calibration above recommends `min(6 s, 4 s + 5 ms per second of
+audio)` for Mumla's retained-audio transport; the caller applies that policy.
+A second device upload needs its own measured budget. The profile format is
+preserved. The producer admission cap bounds a previously unbounded backlog.
 Batch filtering now always preserves the caller's original text when no label
 is dropped, including empty or unjudged labelled replies.
 
