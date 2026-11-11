@@ -37,6 +37,11 @@ credentials, personal configuration, raw provider output or recordings.
   settings, account isolation, profile directory, diagnostics and history decoding.
   Word timing in core `SpeakerPhrase` is typed from the audio start; adapters
   translate wire formats. Profiles never leave the caller's isolated directory.
+  `VoiceCheck` owns live finalization and batch filtering. Its caller supplies
+  the added wait budget and maps public failures into app diagnostics. A late
+  reply cannot replace delivered text; pre-delivery cancellation prevents
+  delivery, and post-delivery teardown preserves learning. Retire the store
+  before replacing an account; Forget My Voice fences earlier captures.
   Doubt or failure keeps everyone's text. Regenerate the single committed model
   with `just speaker-model`; `scripts/check-speaker-model` checks its binary,
   conversion script and reference fixture against the committed checksum.

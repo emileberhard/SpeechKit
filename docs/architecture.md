@@ -22,9 +22,8 @@ container never changes during its lifetime; changing that requires a new store
 and directory. Existing zone names, record formats, account fencing and chunk
 sizes remain stable so current app data stays readable.
 
-The public repository starts with curated source history. Generated provider
-audio is local because the original generation account's redistribution rights
-were not established. The fixture script records synthetic sentences and takes
+The public repository starts with curated source history. Provider-generated diagnostics remain local. The speaker tests carry only
+synthetic fixtures moved from the public consumer test suite. The fixture script records synthetic sentences and takes
 credentials explicitly. Offline tests require no provider account.
 
 The store keeps an in-memory index of capture summaries (account, seal, receipt
@@ -140,3 +139,10 @@ encoding and model version remain unchanged so existing installations keep
 their learned voice. The extraction preserves rules and thresholds; calibration
 changes are separate work. See [speaker recognition](speaker-recognition.md)
 for model provenance, rules and calibration.
+
+`VoiceCheck` owns the watch, label fetch, delivery race and post-delivery
+learning. Apps supply the added wait budget because their label transports
+have different upload costs. Cancellation before delivery prevents delivery;
+normal teardown after delivery preserves learning. A retired store and the
+synced forget date fence late writes. A fetch is cancelled at the deadline but
+never joined, so uncooperative network work cannot hold up plain-text delivery.

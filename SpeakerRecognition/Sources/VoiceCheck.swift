@@ -20,6 +20,8 @@ nonisolated struct VoiceCheckClock: Sendable {
 }
 
 public actor VoiceCheck {
+    public nonisolated static let maximumSamples = VoiceWatch.maximumSamples
+
     private enum State {
         case capturing
         case checking
@@ -48,7 +50,6 @@ public actor VoiceCheck {
     private var replyTime: Duration?
     private var deliveryDeadline: ContinuousClock.Instant?
     private var everyone = ""
-    private var budget: Duration = .zero
 
     public init(profile: VoiceProfile, store: VoiceProfileStore, startedAt: Date,
                 onFailure: @escaping @Sendable (VoiceFilterStage, VoiceCheckFailure) -> Void) throws {
@@ -75,10 +76,9 @@ public actor VoiceCheck {
 
     public nonisolated func append(_ pcm16: Data) { watch.append(pcm16) }
 
-    public func finish(deadline: Duration, fetch: @escaping @Sendable () async throws -> [SpeakerPhrase]) {
+    public func finish(fetch: @escaping @Sendable () async throws -> [SpeakerPhrase]) {
         watch.finish()
         guard case .capturing = state else { return }
-        budget = deadline
         guard profile.isTrusted else {
             state = .decided(.undecided)
             return
@@ -96,7 +96,7 @@ public actor VoiceCheck {
         }
     }
 
-    public func resolve(everyone: String) async throws -> VoiceCheckResult {
+    public func resolve(everyone: String, waitingUpTo budget: Duration) async throws -> VoiceCheckResult {
         try Task.checkCancellation()
         guard store.isCurrent(startedAt: startedAt) else {
             cancel()
@@ -146,6 +146,7 @@ public actor VoiceCheck {
     }
 
     public func cancel() {
+        if case .delivered = state { return }
         state = .cancelled
         checking?.cancel()
         fetching?.cancel()
@@ -241,7 +242,11 @@ public actor VoiceCheck {
     }
 
     @concurrent public static func filter(pcm16: Data, phrases: [SpeakerPhrase]?, everyone: String, profile: VoiceProfile,
+                                         store: VoiceProfileStore, startedAt: Date,
                                          onFailure: @Sendable (VoiceFilterStage, VoiceCheckFailure) -> Void) async -> VoiceCheckResult {
+        guard store.isCurrent(startedAt: startedAt), !Task.isCancelled else {
+            return VoiceCheckResult(text: everyone, everyone: everyone, outcome: .undecided, labelledReplyTime: nil)
+        }
         guard pcm16.count / 2 <= VoiceWatch.maximumSamples else {
             return VoiceCheckResult(text: everyone, everyone: everyone, outcome: .tooLong, labelledReplyTime: nil)
         }
@@ -253,8 +258,14 @@ public actor VoiceCheck {
             let audio = SpeakerAudio(embedder: try SpeakerEmbedder(modelURL: SpeakerEmbedder.requireModelURL()), pcm: PCM16Audio(pcm16))
             let text = VoiceFilter.text(of: phrases)
             let result = try await VoiceFilter.apply(phrases, everyone: text, audio: audio, profile: reference)
+            guard store.isCurrent(startedAt: startedAt), !Task.isCancelled else {
+                return VoiceCheckResult(text: everyone, everyone: everyone, outcome: .undecided, labelledReplyTime: nil)
+            }
             return VoiceCheckResult(text: result.text, everyone: text, outcome: result.outcome, labelledReplyTime: nil)
         } catch {
+            guard store.isCurrent(startedAt: startedAt), !Task.isCancelled else {
+                return VoiceCheckResult(text: everyone, everyone: everyone, outcome: .undecided, labelledReplyTime: nil)
+            }
             onFailure(.filter, VoiceCheckFailure(underlying: error))
             return VoiceCheckResult(text: everyone, everyone: everyone, outcome: .failed, labelledReplyTime: nil)
         }
