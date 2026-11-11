@@ -50,7 +50,7 @@ struct VoiceCheckTests {
             await releaseTimer.wait()
         })
         let profile = try await trustedProfile()
-        let check = try VoiceCheck(profile: profile, store: VoiceProfileStore(accountDirectory: directory), startedAt: .now,
+        let check = VoiceCheck(profile: profile, store: VoiceProfileStore(accountDirectory: directory), startedAt: .now,
                                   onFailure: { _, _ in failures.withLock { $0 += 1 } },
                                   watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: profile.trustedMean), clock: clock)
         check.append(try mixedAudio())
@@ -85,7 +85,7 @@ struct VoiceCheckTests {
             await fireTimer.wait()
         })
         let profile = try await trustedProfile()
-        let check = try VoiceCheck(profile: profile, store: store, startedAt: .now, onFailure: { _, failure in
+        let check = VoiceCheck(profile: profile, store: store, startedAt: .now, onFailure: { _, failure in
             if let error = failure as? VoiceFilterError { failures.withLock { $0.append(error) } }
         }, watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: profile.trustedMean), clock: clock)
         check.append(try mixedAudio())
@@ -117,7 +117,7 @@ struct VoiceCheckTests {
         let failures = OSAllocatedUnfairLock(initialState: 0)
         let store = VoiceProfileStore(accountDirectory: directory)
         let profile = try await trustedProfile()
-        let check = try VoiceCheck(profile: profile, store: store, startedAt: .now,
+        let check = VoiceCheck(profile: profile, store: store, startedAt: .now,
                                   onFailure: { _, _ in failures.withLock { $0 += 1 } },
                                   watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: profile.trustedMean),
                                   clock: VoiceCheckClock(now: { .now }, sleep: { _ in
@@ -231,7 +231,7 @@ struct VoiceCheckTests {
             await fireTimer.wait()
         })
         func makeCheck() async throws -> (VoiceCheck, ModelLifetime) {
-            let profile = trustedProfile()
+            let profile = try await trustedProfile()
             let watch = VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: profile.trustedMean)
             let check = VoiceCheck(profile: profile, store: store, startedAt: .now, onFailure: { _, _ in }, watch: watch, clock: clock)
             check.append(try mixedAudio())
@@ -265,7 +265,7 @@ struct VoiceCheckTests {
         let now = OSAllocatedUnfairLock(initialState: ContinuousClock.now)
         let caller = OSAllocatedUnfairLock<Task<VoiceCheckResult, any Error>?>(initialState: nil)
         let store = VoiceProfileStore(accountDirectory: directory)
-        let profile = trustedProfile()
+        let profile = try await trustedProfile()
         let check = VoiceCheck(profile: profile, store: store, startedAt: .now,
                                onFailure: { _, _ in caller.withLock { $0 }?.cancel() },
                                watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: profile.trustedMean),
