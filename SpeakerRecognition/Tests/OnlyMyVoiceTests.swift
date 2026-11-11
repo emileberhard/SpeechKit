@@ -173,6 +173,25 @@ struct VoiceFilterTests {
         #expect(label.evidence.reduce(0) { $0 + $1.count } == 10_000)
     }
 
+    @Test func shortTurnsNeedAStrongAnchorAndTwoClearRejections() {
+        let labels = [
+            SpeakerLabel(speaker: 0, speechMilliseconds: 1_200, evidence: []),
+            SpeakerLabel(speaker: 1, speechMilliseconds: 1_500, evidence: []),
+            SpeakerLabel(speaker: 2, speechMilliseconds: 1_100, evidence: []),
+            SpeakerLabel(speaker: 3, speechMilliseconds: 999, evidence: []),
+            SpeakerLabel(speaker: 4, speechMilliseconds: 1_400, evidence: []),
+        ]
+        let embeddings = [
+            0: axis(0, 0.8, plus: 9, 0.6),
+            1: axis(1, 1, plus: 0, 0.1),
+            2: axis(2, 1, plus: 0, 0.3),
+            3: axis(3),
+            4: axis(0, 0.4, plus: 4, 0.9165),
+        ]
+        #expect(VoiceFilter.keptSpeakers(of: labels, embeddings: embeddings, profile: axis(0)) == [0, 2, 3, 4])
+        #expect(VoiceFilter.keptSpeakers(of: Array(labels.dropFirst()), embeddings: embeddings, profile: axis(0)) == nil)
+    }
+
     @Test func anotherPersonIsDroppedAndShortLabelsAreKept() {
         let phrases = [phrase(0, "Mine.", seconds: 5), phrase(1, "Theirs.", seconds: 3, at: 6_000), phrase(2, "Hm?", seconds: 1, at: 10_000)]
         let labels = VoiceFilter.labels(in: phrases)

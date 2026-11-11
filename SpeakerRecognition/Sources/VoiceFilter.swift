@@ -15,7 +15,10 @@ nonisolated struct SpeakerLabel: Equatable, Sendable {
 
 nonisolated enum VoiceFilter {
     static let sameVoiceThreshold: Float = 0.35
-    static let minimumJudgedMilliseconds = 2_000
+    static let minimumJudgedMilliseconds = 1_000
+    private static let longLabelMilliseconds = 2_000
+    private static let shortAnchorThreshold: Float = 0.5
+    private static let shortRejectionThreshold: Float = 0.25
     private static let mergeGapMilliseconds = 150
     private static let paddingMilliseconds = 50
     private static let windowMilliseconds = SpeakerEmbedder.windowSamples * 1_000 / KaldiFilterbank.sampleRate
@@ -45,14 +48,19 @@ nonisolated enum VoiceFilter {
     }
 
     static func keptSpeakers(of labels: [SpeakerLabel], embeddings: [Int: SpeakerEmbedding], profile: SpeakerEmbedding) -> Set<Int>? {
-        let judged = labels.filter(\.isJudged).compactMap { label in embeddings[label.speaker].map { (label.speaker, $0) } }
-        guard let anchor = judged.max(by: { $0.1.similarity(to: profile) < $1.1.similarity(to: profile) }),
-              anchor.1.similarity(to: profile) >= sameVoiceThreshold else { return nil }
-        let dropped = Set(judged.filter { speaker, embedding in
-            speaker != anchor.0
-                && embedding.similarity(to: anchor.1) < sameVoiceThreshold
-                && embedding.similarity(to: profile) < sameVoiceThreshold
-        }.map(\.0))
+        let judged = labels.filter(\.isJudged).compactMap { label in
+            embeddings[label.speaker].map { (label: label, embedding: $0) }
+        }
+        let anchors = judged.filter {
+            $0.embedding.similarity(to: profile) >= ($0.label.speechMilliseconds < longLabelMilliseconds ? shortAnchorThreshold : sameVoiceThreshold)
+        }
+        guard let anchor = anchors.max(by: { $0.embedding.similarity(to: profile) < $1.embedding.similarity(to: profile) }) else { return nil }
+        let dropped = Set(judged.filter { label, embedding in
+            let threshold = label.speechMilliseconds < longLabelMilliseconds ? shortRejectionThreshold : sameVoiceThreshold
+            return label.speaker != anchor.label.speaker
+                && embedding.similarity(to: anchor.embedding) < threshold
+                && embedding.similarity(to: profile) < threshold
+        }.map { $0.label.speaker })
         guard !dropped.isEmpty else { return nil }
         return Set(labels.map(\.speaker)).subtracting(dropped)
     }
