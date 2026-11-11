@@ -18,21 +18,24 @@ public struct AzureSpeechTranscriptionProvider: ProgressiveTranscriptionProvider
             customVocabulary: request.customVocabulary,
             instructions: request.instructions
         ))
-        let (data, response) = try await upload(request.audio, prepared: prepared)
+        let (data, response) = try await upload(request.audio, prepared: prepared, delegate: nil)
         return try decode(data, response: response, warnings: prepared.warnings)
     }
 
-    @concurrent public func transcribeSpeakers(_ request: TranscriptionRequest) async throws -> [SpeakerPhrase] {
+    @concurrent public func transcribeSpeakers(_ request: TranscriptionRequest,
+        uploadFinished: (@Sendable (Duration) -> Void)? = nil) async throws -> [SpeakerPhrase] {
         let definition = try AzureSpeechAPI.speakerDefinition(configuration: configuration, request: .init(
             languageHints: request.languageHints, customVocabulary: request.customVocabulary, instructions: request.instructions
         ))
         let prepared = try prepare(definition)
-        let (data, response) = try await upload(request.audio, prepared: prepared)
+        let (data, response) = try await upload(request.audio, prepared: prepared,
+            delegate: uploadFinished.map { AzureSpeechUploadObserver(completed: $0) })
         guard (200..<300).contains(response.statusCode) else { throw failure(for: response) }
         return try JSONDecoder().decode(AzureSpeechAPI.SpeakerResponse.self, from: data).validatedPhrases()
     }
 
-    private func upload(_ audio: TranscriptionAudio, prepared: (multipart: MultipartFormDataBuilder, boundary: String, warnings: [String]))
+    private func upload(_ audio: TranscriptionAudio, prepared: (multipart: MultipartFormDataBuilder, boundary: String, warnings: [String]),
+                        delegate: (any URLSessionTaskDelegate)?)
         async throws -> (Data, HTTPURLResponse) {
         let fileExtension = audio.fileExtension.lowercased()
         guard ["wav", "mp3", "flac"].contains(fileExtension),
@@ -48,7 +51,7 @@ public struct AzureSpeechTranscriptionProvider: ProgressiveTranscriptionProvider
         multipart.finalize()
         var urlRequest = try makeRequest(boundary: prepared.boundary)
         urlRequest.httpBody = multipart.build()
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await session.data(for: urlRequest, delegate: delegate)
         guard let response = response as? HTTPURLResponse else { throw SpeechKitError.invalidResponse }
         return (data, response)
     }
@@ -125,5 +128,19 @@ public struct AzureSpeechTranscriptionProvider: ProgressiveTranscriptionProvider
             modelID: configuration.model.modelID,
             warnings: warnings
         )
+    }
+}
+
+private final class AzureSpeechUploadObserver: NSObject, URLSessionTaskDelegate, Sendable {
+    private let started = ContinuousClock.now
+    private let completed: @Sendable (Duration) -> Void
+
+    init(completed: @escaping @Sendable (Duration) -> Void) { self.completed = completed }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
+                    totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
+        if totalBytesExpectedToSend > 0, totalBytesSent >= totalBytesExpectedToSend {
+            completed(started.duration(to: .now))
+        }
     }
 }

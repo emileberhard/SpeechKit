@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Synchronization
 @testable import SpeechKit
 
 @Suite(.timeLimit(.minutes(1)))
@@ -12,7 +13,12 @@ struct AzureSpeechIntegrationTests {
         let pcm = try FixtureAudio.pcm16("clip5_realtime_dictation_en.mp3", sampleRate: 16_000)
         let audio = try TranscriptionAudio(data: PCM16WAVFile.data(pcmData: pcm, sampleRate: 16_000),
                                          fileName: "fixture.wav", mimeType: "audio/wav", fileExtension: "wav")
-        let phrases = try await provider.transcribeSpeakers(.init(audio: audio, languageHints: ["en"], customVocabulary: ["SpeechKit", "recording"]))
+        let upload = Mutex<Duration?>(nil)
+        let start = ContinuousClock.now
+        let phrases = try await provider.transcribeSpeakers(.init(audio: audio, languageHints: ["en"], customVocabulary: ["SpeechKit", "recording"]),
+            uploadFinished: { time in upload.withLock { $0 = time } })
+        let uploadMilliseconds = upload.withLock { $0.map { String(Int($0 / .milliseconds(1))) } ?? "unknown" }
+        print("Azure speaker request upload_ms=\(uploadMilliseconds) completion_ms=\(Int(start.duration(to: .now) / .milliseconds(1)))")
         try assertAnchors(phrases.map(\.text).joined(separator: " "))
         #expect(!phrases.isEmpty)
         #expect(phrases.allSatisfy { $0.speaker >= 0 && !$0.words.isEmpty })

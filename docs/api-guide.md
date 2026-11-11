@@ -86,7 +86,10 @@ language hints and compatible dictionary terms. Ordinary transcription never
 enables diarization. Attribution rejects missing labels or word times, invalid
 timing ranges and incomplete phrase text rather than returning a partial
 transcript. Callers that use attribution as an optional check must keep their
-original transcript on failure. The removed configuration Boolean is replaced
+original transcript on failure. The optional `uploadFinished` callback reports
+the elapsed time until URLSession has sent the request body; it does not claim
+that the server has processed it. No callback means upload timing is unknown.
+The removed configuration Boolean is replaced
 by this explicit operation; other Azure models continue using ordinary transcription.
 
 The default REST API version is `2025-10-15`. MAI-Transcribe-2 remains a preview
