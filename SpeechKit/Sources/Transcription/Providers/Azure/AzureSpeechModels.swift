@@ -113,23 +113,23 @@ enum AzureSpeechAPI {
         let phrases: [Phrase]
 
         func validatedPhrases() throws -> [SpeakerPhrase] {
-            guard durationMilliseconds > 0, !phrases.isEmpty,
+            guard durationMilliseconds >= 0,
                   normalized(combinedPhrases.map(\.text)) == normalized(phrases.map(\.text)) else {
                 throw SpeechKitError.invalidResponse
             }
+            guard !phrases.isEmpty else { return [] }
+            guard durationMilliseconds > 0 else { throw SpeechKitError.invalidResponse }
             return try phrases.map { phrase in
                 guard phrase.speaker >= 0, !phrase.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                       !phrase.words.isEmpty else { throw SpeechKitError.invalidResponse }
                 var previous: Int64 = -1
-                let words = try phrase.words.map { word -> Range<Duration> in
+                let words = try phrase.words.compactMap { word -> Range<Duration>? in
                     guard word.offsetMilliseconds >= 0, word.offsetMilliseconds >= previous,
-                          word.durationMilliseconds > 0,
-                          word.offsetMilliseconds <= durationMilliseconds,
-                          word.durationMilliseconds <= durationMilliseconds - word.offsetMilliseconds else {
-                        throw SpeechKitError.invalidResponse
-                    }
+                          word.durationMilliseconds > 0 else { throw SpeechKitError.invalidResponse }
                     previous = word.offsetMilliseconds
-                    return Duration.milliseconds(word.offsetMilliseconds)..<Duration.milliseconds(word.offsetMilliseconds + word.durationMilliseconds)
+                    guard word.offsetMilliseconds < durationMilliseconds else { return nil }
+                    let length = min(word.durationMilliseconds, durationMilliseconds - word.offsetMilliseconds)
+                    return Duration.milliseconds(word.offsetMilliseconds)..<Duration.milliseconds(word.offsetMilliseconds + length)
                 }
                 return SpeakerPhrase(speaker: phrase.speaker, text: phrase.text, words: words)
             }

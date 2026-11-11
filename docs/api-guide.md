@@ -878,3 +878,7 @@ recording. `VoiceCheck.filter(pcm16:phrases:everyone:profile:store:startedAt:onF
 is the batch form and does not relearn replayed recordings. See the
 [speaker recognition design](speaker-recognition.md) for the rules and model
 notice.
+
+Speaker reply validation clamps a word that overruns the reported audio end,
+and ignores out-of-audio word times while retaining their phrase text. An empty
+reply is valid; missing labels for nonempty combined text remain an error.

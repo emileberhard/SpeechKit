@@ -26,13 +26,26 @@ struct AzureSpeechTests {
         ])
     }
 
+    @Test func finalWordIsClampedAndOutOfAudioWordsKeepTheirPhraseText() throws {
+        let data = Data(#"{"durationMilliseconds":1000,"combinedPhrases":[{"text":"Keep every word."}],"phrases":[{"speaker":0,"text":"Keep every word.","words":[{"offsetMilliseconds":900,"durationMilliseconds":120},{"offsetMilliseconds":1000,"durationMilliseconds":50},{"offsetMilliseconds":9223372036854775807,"durationMilliseconds":1}]}]}"#.utf8)
+        let phrases = try JSONDecoder().decode(AzureSpeechAPI.SpeakerResponse.self, from: data).validatedPhrases()
+        #expect(phrases == [SpeakerPhrase(speaker: 0, text: "Keep every word.", words: [.milliseconds(900)..<Duration.milliseconds(1000)])])
+    }
+
+    @Test func emptyReplyIsAValidEmptyAttribution() throws {
+        let data = Data(#"{"durationMilliseconds":0,"combinedPhrases":[],"phrases":[]}"#.utf8)
+        #expect(try JSONDecoder().decode(AzureSpeechAPI.SpeakerResponse.self, from: data).validatedPhrases().isEmpty)
+        let missing = Data(#"{"durationMilliseconds":1000,"combinedPhrases":[{"text":"Words without a speaker."}],"phrases":[]}"#.utf8)
+        #expect(throws: SpeechKitError.self) {
+            try JSONDecoder().decode(AzureSpeechAPI.SpeakerResponse.self, from: missing).validatedPhrases()
+        }
+    }
+
     @Test(arguments: [
         #"{"speaker":-1,"text":"Keep this.","words":[{"offsetMilliseconds":0,"durationMilliseconds":100}]}"#,
         #"{"speaker":0,"text":"Keep this.","words":[]}"#,
         #"{"speaker":0,"text":"Keep this.","words":[{"offsetMilliseconds":-1,"durationMilliseconds":100}]}"#,
         #"{"speaker":0,"text":"Keep this.","words":[{"offsetMilliseconds":0,"durationMilliseconds":0}]}"#,
-        #"{"speaker":0,"text":"Keep this.","words":[{"offsetMilliseconds":900,"durationMilliseconds":101}]}"#,
-        #"{"speaker":0,"text":"Keep this.","words":[{"offsetMilliseconds":9223372036854775807,"durationMilliseconds":1}]}"#,
         #"{"speaker":0,"text":"Partial.","words":[{"offsetMilliseconds":0,"durationMilliseconds":100}]}"#
     ])
     func malformedAttributionFailsRatherThanDroppingWords(phrase: String) throws {
