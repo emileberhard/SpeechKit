@@ -12,7 +12,11 @@ Failure, timeout and doubt preserve everyone's words.
 `VoiceCheck.append` feeds the watcher while capturing. After all audio has been
 admitted, `finish(fetch:)` closes the watcher. With a trusted profile, it requests
 labels only if the finished watcher asks for them; the closure runs at most once
-and independently of the plain transcript. An unfinished watcher never delays
+and independently of the plain transcript. It receives the admitted 16 kHz mono
+PCM16, the same samples the filter embeds. A transport that uploads audio uses
+this argument without keeping a second recognition buffer; a transport that
+already holds the audio ignores it. Incomplete, over-limit recordings never
+invoke the closure. An unfinished watcher never delays
 the plain transcript. `resolve(everyone:waitingUpTo:)` starts the caller's added
 wait budget when everyone's text arrives, filters labels if available, and
 returns a typed result containing delivered text, everyone's text, outcome and
@@ -192,10 +196,12 @@ supported-pair rule admits 192 (56.5%), fourteen fewer than the original gate
 (4.1 percentage points), and marks the short and balanced continuous synthetic
 mixes as mixed. The corresponding uncorroborated pair rule admits only 188.
 Thirty of the 32 ordinary request flags are also withheld by the standalone
-gate. A successful labelled pass supersedes that gate: at most one speaker may
-teach, while two or more speakers skip both exemplars and trust observations.
-Eight of 34 cached-labelled recordings that pass the standalone gate have
-multiple labels and are therefore vetoed by the authoritative reply.
+gate and do not teach, even after their single-speaker replies. A successful
+labelled pass can only withhold learning: at most one speaker and no dropped
+labels are required, and the standalone coherence gate always applies. Multiple
+speakers skip both exemplars and trust observations. Eight of 34 cached-labelled
+recordings that pass the standalone gate have multiple labels and are therefore
+also vetoed by the reply.
 
 Sixty-seven new paid labelled requests were made through the existing personal
 route: two leak replays, ten missing word-timed replies from the screened set,
@@ -284,8 +290,10 @@ Forget My Voice.
 - **Learning** requires at least 5 s of speech and no profile-independent
   evidence of mixed voices: the original piece comparison uses 0.35, while the window rule requires
   two supported windows below 0.05 against each other, each supported by another
-  window at 0.50. A successful labelled pass instead decides eligibility:
-  at most one attributed speaker may teach; multiple speakers skip learning. A mismatch with
+  window at 0.50. A successful labelled pass can only withhold learning:
+  at most one attributed speaker and no dropped labels are required, and the
+  standalone coherence gate always applies. Multiple speakers skip both
+  exemplars and trust observations. A mismatch with
   the profile alone never vetoes learning. After delivery, one embedding of up
   to 10 s of speech becomes a candidate. Trust observations run even after the
   exemplar set freezes, so eight coherent misses in ten still reset a wrong

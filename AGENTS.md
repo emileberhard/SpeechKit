@@ -38,7 +38,9 @@ credentials, personal configuration, raw provider output or recordings.
   Word timing in core `SpeakerPhrase` is typed from the audio start; adapters
   translate wire formats. Profiles never leave the caller's isolated directory.
   `VoiceCheck` owns live finalization and batch filtering. Its caller supplies
-  the added wait budget and maps public failures into app diagnostics. A late
+  the added wait budget and maps public failures into app diagnostics. Its label
+  fetch receives the admitted 16 kHz mono PCM16, so uploads and embeddings use
+  the same samples without a caller-owned second buffer. A late
   reply cannot replace delivered text; pre-delivery cancellation prevents
   delivery, and post-delivery teardown preserves learning. Retire the store
   before replacing an account. Retirement and Forget My Voice revoke late
@@ -78,8 +80,10 @@ credentials, personal configuration, raw provider output or recordings.
 - Speaker recognition separates profile contrast (whether labels are useful)
   from profile-independent voice coherence (whether a recording may teach).
   Coherent mismatches must still reach trust observations after exemplars freeze.
-  A successful labelled pass owns learning eligibility: at most one speaker may
-  teach; multiple speakers skip both exemplars and trust observations.
+  A successful labelled pass can only withhold learning: multiple speakers or
+  any dropped label skip both exemplars and trust observations. The standalone
+  coherence gate always applies, including when the reply attributes all speech
+  to one speaker.
   Callers own transport wait budgets; every attempted labelled check reports its
   elapsed time and timeout keeps everyone's text.
 - Tests use Swift Testing and synthetic inputs. Default tests stay offline;

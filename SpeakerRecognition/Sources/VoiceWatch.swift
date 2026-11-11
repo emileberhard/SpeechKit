@@ -251,12 +251,7 @@ nonisolated struct VoiceRecording: Sendable {
     }
 
     @concurrent func learningCandidate() async throws -> SpeakerEmbedding? {
-        guard !containsMixedVoices else { return nil }
-        return try await singleSpeakerCandidate()
-    }
-
-    @concurrent func singleSpeakerCandidate() async throws -> SpeakerEmbedding? {
-        guard isComplete, pieces.reduce(0, { $0 + $1.samples.count }) >= Self.minimumLearningSamples else { return nil }
+        guard isComplete, !containsMixedVoices, pieces.reduce(0, { $0 + $1.samples.count }) >= Self.minimumLearningSamples else { return nil }
         return try await audio.embedding(of: pieces.map(\.samples))
     }
 }
@@ -275,6 +270,10 @@ nonisolated struct PCM16Audio: Sendable {
         chunks.append(pcm)
         starts.append(sampleCount)
         sampleCount += pcm.count / 2
+    }
+
+    @concurrent func data() async -> Data {
+        chunks.reduce(into: Data(capacity: sampleCount * 2)) { $0.append($1) }
     }
 
     func samples(in range: Range<Int>) -> [Float] {

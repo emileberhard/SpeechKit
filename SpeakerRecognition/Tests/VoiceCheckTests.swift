@@ -54,7 +54,7 @@ struct VoiceCheckTests {
                                   onFailure: { _, _ in failures.withLock { $0 += 1 } },
                                   watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: profile.trustedMean), clock: clock)
         check.append(try mixedAudio())
-        await check.finish {
+        await check.finish { _ in
             await requested.open()
             await releaseFetch.wait()
             return []
@@ -72,8 +72,8 @@ struct VoiceCheckTests {
         await check.cancel()
     }
 
-    @Test(.timeLimit(.minutes(1)), arguments: [4.1, 5.0])
-    func multipleLabelledSpeakersNeverTeachTheProfile(ownSeconds: Double) async throws {
+    @Test(.timeLimit(.minutes(1)), arguments: [4.1, 5.0], [1, 2])
+    func labelledMixedSpeechNeverTeachesTheProfile(ownSeconds: Double, labelCount: Int) async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let own = try SpeakerFixtures.continuousSpeech("en-teen-note")
@@ -86,7 +86,9 @@ struct VoiceCheckTests {
         let samples = Array(other.prefix(64_000)) + Array(own.prefix(Int(ownSeconds * 16_000)))
         let split = 4_000
         let end = samples.count * 1_000 / 16_000
-        let phrases = [
+        let phrases = labelCount == 1 ? [
+            SpeakerPhrase(speaker: 0, text: "First. Second.", words: [.zero ..< .milliseconds(end)]),
+        ] : [
             SpeakerPhrase(speaker: 0, text: "First.", words: [.zero ..< .milliseconds(split)]),
             SpeakerPhrase(speaker: 1, text: "Second.", words: [.milliseconds(split) ..< .milliseconds(end)]),
         ]
@@ -95,13 +97,14 @@ struct VoiceCheckTests {
                                                onFailure: { _, _ in Issue.record("Unexpected failure") })
         weak let released = check
         check!.append(SpeakerFixtures.pcm16(samples))
-        await check!.finish {
+        await check!.finish { _ in
             await requested.open()
             return phrases
         }
         await requested.wait()
         let result = try await check!.resolve(everyone: "First. Second.", waitingUpTo: .seconds(5))
-        #expect(result.outcome.labelCount == 2)
+        #expect(result.outcome.labelCount == labelCount)
+        if labelCount == 1 { #expect(result.outcome.droppedCount == 0) }
         await check!.cancel()
         check = nil
         while released != nil { await Task.yield() }
@@ -121,7 +124,7 @@ struct VoiceCheckTests {
             failures.withLock { $0 += 1 }
             caller.withLock { $0 }?.cancel()
         }, watch: watch, clock: .continuous)
-        await check.finish { [] }
+        await check.finish { _ in [] }
         await check.checking?.value
         let start = Signal()
         let resolving = Task {
@@ -152,7 +155,7 @@ struct VoiceCheckTests {
             if let error = failure as? VoiceFilterError { failures.withLock { $0.append(error) } }
         }, watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: profile.trustedMean), clock: clock)
         check.append(try mixedAudio())
-        await check.finish {
+        await check.finish { _ in
             await requested.open()
             await releaseFetch.wait()
             return [SpeakerPhrase(speaker: 0, text: "Late.", words: [])]
@@ -188,7 +191,7 @@ struct VoiceCheckTests {
             await release.wait()
         }))
         check.append(try mixedAudio())
-        await check.finish {
+        await check.finish { _ in
             await requested.open()
             await release.wait()
             throw VoiceFilterError.voicesUnavailable
@@ -213,7 +216,7 @@ struct VoiceCheckTests {
         let check = try VoiceCheck(profile: await store.profile(), store: store, startedAt: .now,
                                   onFailure: { _, _ in failures.withLock { $0 += 1 } })
         check.append(SpeakerFixtures.pcm16(try SpeakerFixtures.speech("en-developer-message")))
-        await check.finish { throw VoiceFilterError.voicesUnavailable }
+        await check.finish { _ in throw VoiceFilterError.voicesUnavailable }
         let result = try await check.resolve(everyone: "Everyone.", waitingUpTo: .seconds(2))
         await check.cancel()
         while try await store.profile().candidates.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
@@ -248,13 +251,17 @@ struct VoiceCheckTests {
         let check = try VoiceCheck(profile: profile, store: store, startedAt: .now,
                                   onFailure: { _, _ in Issue.record("Unexpected failure") })
         let requested = Signal()
-        check.append(SpeakerFixtures.pcm16(own + SpeakerFixtures.silence + other + SpeakerFixtures.silence))
+        let pcm16 = SpeakerFixtures.pcm16(own + SpeakerFixtures.silence + other + SpeakerFixtures.silence)
+        for offset in stride(from: 0, to: pcm16.count, by: 3_200) {
+            check.append(pcm16.subdata(in: offset..<min(offset + 3_200, pcm16.count)))
+        }
         let otherStart = Duration.seconds(Double(own.count + 16_000) / 16_000)
         let phrases = [
             SpeakerPhrase(speaker: 0, text: "Mine.", words: [.zero ..< .seconds(Double(own.count) / 16_000)]),
             SpeakerPhrase(speaker: 1, text: "Other.", words: [otherStart ..< otherStart + .seconds(Double(other.count) / 16_000)]),
         ]
-        await check.finish {
+        await check.finish { admittedPCM in
+            #expect(admittedPCM == pcm16)
             await requested.open()
             return phrases
         }
@@ -262,6 +269,24 @@ struct VoiceCheckTests {
         let result = try await check.resolve(everyone: "Mine. Other.", waitingUpTo: .seconds(5))
         #expect(result.text == "Mine." && result.everyone == "Mine. Other.")
         #expect(result.outcome.path == .filtered && result.outcome.droppedCount == 1)
+        await check.cancel()
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func anOverLimitRecordingNeverFetchesLabels() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = VoiceProfileStore(accountDirectory: directory)
+        let check = try VoiceCheck(profile: await trustedProfile(), store: store, startedAt: .now,
+                                  onFailure: { _, _ in Issue.record("Unexpected failure") })
+        check.append(Data(repeating: 0, count: (VoiceCheck.maximumSamples + 1) * 2))
+        await check.finish { _ in
+            Issue.record("An over-limit recording must not fetch labels")
+            return []
+        }
+        await check.checking?.value
+        let result = try await check.resolve(everyone: "Original.", waitingUpTo: .seconds(2))
+        #expect(result.text == "Original." && result.outcome.path == .tooLong)
         await check.cancel()
     }
 
@@ -298,7 +323,7 @@ struct VoiceCheckTests {
             let watch = VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: profile.trustedMean)
             let check = VoiceCheck(profile: profile, store: store, startedAt: .now, onFailure: { _, _ in }, watch: watch, clock: clock)
             check.append(try mixedAudio())
-            await check.finish {
+            await check.finish { _ in
                 await requested.open()
                 await releaseFetch.wait()
                 return []
@@ -337,7 +362,7 @@ struct VoiceCheckTests {
             await fireTimer.wait()
         }))
         check.append(try mixedAudio())
-        await check.finish {
+        await check.finish { _ in
             await requested.open()
             await releaseFetch.wait()
             return []

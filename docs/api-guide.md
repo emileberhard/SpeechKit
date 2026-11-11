@@ -839,13 +839,20 @@ Adapters translate their wire formats before passing phrases to recognition.
 
 The live path creates `VoiceCheck(profile:store:startedAt:onFailure:)`, appends
 16 kHz mono PCM16 during capture, then calls `finish(fetch:)` after all audio is
-admitted. The closure returns `[SpeakerPhrase]` and runs only when requested.
+admitted. The closure has type `@Sendable (Data) async throws -> [SpeakerPhrase]`
+and receives exactly the admitted 16 kHz mono PCM16 when labels are requested.
+Upload that argument for a transport that needs audio; a transport that already
+holds the audio may ignore it. Callers need no second recognition buffer.
+Incomplete, over-limit recordings never invoke the closure.
 `resolve(everyone:waitingUpTo:)` takes the additional delivery budget after the
 ordinary transcript arrives and returns `VoiceCheckResult` with `text`,
 `everyone`, `outcome` and optional `labelledReplyTime`. Failures report a stage
 and the original error; they keep everyone's text. Cancellation
 before delivery throws `CancellationError` and prevents delivery. `cancel()`
-after delivery preserves learning, so normal session teardown is safe.
+after delivery preserves learning, so normal session teardown is safe. A successful
+labelled reply can only withhold learning: it requires at most one speaker and
+no dropped labels, and the recording must still pass the standalone coherence
+gate.
 
 `VoiceProfileStore(accountDirectory:)` owns the local file. Apps supply an
 isolated directory per account and call `retire()` before replacing its owner.
