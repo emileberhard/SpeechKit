@@ -23,8 +23,8 @@ nonisolated public struct VoiceFilterOutcome: Sendable {
 
     static let notHeard = Self(path: .notHeard, labelCount: 0, droppedCount: 0, unfilteredText: nil)
     static let tooLong = Self(path: .tooLong, labelCount: 0, droppedCount: 0, unfilteredText: nil)
-    static let undecided = Self(path: .undecided, labelCount: 0, droppedCount: 0, unfilteredText: nil)
-    static let failed = Self(path: .failed, labelCount: 0, droppedCount: 0, unfilteredText: nil)
+    public static let undecided = Self(path: .undecided, labelCount: 0, droppedCount: 0, unfilteredText: nil)
+    public static let failed = Self(path: .failed, labelCount: 0, droppedCount: 0, unfilteredText: nil)
 
 
 }

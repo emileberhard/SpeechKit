@@ -116,7 +116,7 @@ struct VoiceCheckTests {
         await check.finish { throw VoiceFilterError.voicesUnavailable }
         let result = try await check.resolve(everyone: "Everyone.", waitingUpTo: .seconds(2))
         await check.cancel()
-        while try await store.profile().candidates.isEmpty { await Task.yield() }
+        while try await store.profile().candidates.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         #expect(result.text == "Everyone." && result.outcome.path == .undecided)
         #expect(try await store.profile().candidates.count == 1)
         #expect(failures.withLock { $0 } == 0)
