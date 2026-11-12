@@ -1,3 +1,4 @@
+import CloudKit
 import Foundation
 
 public enum DictationContext: String, Codable, Sendable {
@@ -109,7 +110,8 @@ public enum DictationLibraryError: Error, Equatable, Sendable, LocalizedError {
     case recordingFinished
     case cloudDeletedRequiresDecision
     case notConfigured
-    case cloudFailure(String)
+    case cloudFailure(domain: String, code: Int)
+    case storageFailure(domain: String, code: Int)
     case heldCapture(UUID)
 
     public var errorDescription: String? {
@@ -120,7 +122,8 @@ public enum DictationLibraryError: Error, Equatable, Sendable, LocalizedError {
         case .profileUnavailable: "The dictation profile could not be loaded. Recordings are kept on this device until it can be verified."
         case .archiveDisabled: "Saving dictations to the library is turned off."
         case .notConfigured: "The dictation library has not been set up yet. Open SpeechKit to configure it."
-        case .cloudFailure(let detail): "iCloud could not be reached (\(detail)). Saved dictations stay on this device and upload later."
+        case .cloudFailure(let domain, let code): "iCloud could not be reached (\(domain) \(code)). Saved dictations stay on this device and upload later."
+        case .storageFailure(let domain, let code): "Dictation storage could not be accessed (\(domain) \(code))."
         case .capacityExceeded(let limit, let used): "Dictation storage is full (\(used) of \(limit) bytes). Nothing was deleted; free space by releasing uploaded originals or raising the storage limit."
         case .invalidCapture: "This dictation is not in the library."
         case .contentConflict: "A different version of this item already exists. The original was kept."
@@ -130,6 +133,29 @@ public enum DictationLibraryError: Error, Equatable, Sendable, LocalizedError {
         case .recordingFinished: "This recording has already finished."
         case .cloudDeletedRequiresDecision: "The iCloud library was deleted. The local archive is intact; choose whether to restore it to iCloud."
         case .heldCapture: "This dictation is held because its account is unverified or different. Review it before it is added to this account."
+        }
+    }
+}
+
+extension DictationLibraryError {
+    init(_ error: any Error) {
+        if let error = error as? Self { self = error; return }
+        let value = error as NSError
+        if value.domain == CKErrorDomain {
+            self = .cloudFailure(domain: value.domain, code: value.code)
+        } else {
+            self = .storageFailure(domain: value.domain, code: value.code)
+        }
+    }
+
+    var stopsPublication: Bool {
+        switch self {
+        case .accountUnavailable, .accountChanged: true
+        case .cloudFailure(let domain, let code) where domain == CKErrorDomain:
+            [.networkFailure, .networkUnavailable, .serviceUnavailable, .requestRateLimited,
+             .zoneBusy, .notAuthenticated, .accountTemporarilyUnavailable, .quotaExceeded,
+             .zoneNotFound, .userDeletedZone, .operationCancelled].contains(CKError.Code(rawValue: code))
+        default: false
         }
     }
 }

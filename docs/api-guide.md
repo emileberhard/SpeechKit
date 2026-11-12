@@ -882,3 +882,26 @@ notice.
 Speaker reply validation clamps a word that overruns the reported audio end,
 and ignores out-of-audio word times while retaining their phrase text. An empty
 reply is valid; missing labels for nonempty combined text remain an error.
+
+### Publication passes
+
+`status().pendingCaptureCount` counts current-account captures that are sealed
+and not fully acknowledged. An active or empty recording is never pending.
+`publishPending()` first recovers interrupted captures, even without a verified
+account, then publishes newest first: chunks, capture, results. Completed writes
+keep their receipts across cancellation. A pass-wide account or CloudKit
+availability failure throws and prevents reclamation; an individual capture
+failure appears as `DictationCaptureFailure.error: DictationLibraryError` while
+other captures continue. Cloud and storage failures expose `domain` and `code`
+in separate cases, without embedding error descriptions.
+
+`finish()` never deletes the capture directory. Recovery removes finished empty
+captures without results, and removes empty captures with results after reopening
+the store. This keeps late result writes valid within the creating store.
+Hosts should hold background execution from sealing/result archiving through
+publication and record pass outcomes in their own diagnostic path.
+
+CloudKit calls use user-initiated QoS. Idempotent creates and fetches retry the
+four transient CloudKit codes up to three attempts and 15 seconds of total sleep;
+server Retry-After is honored or the pass stops. Offline/network-unavailable
+errors and profile saves do not retry within a pass.

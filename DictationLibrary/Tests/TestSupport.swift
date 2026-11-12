@@ -21,6 +21,7 @@ actor FakeCloud: LibraryCloud {
     private var corruptChunks = false
     private var failAfterSavingRecord: String?
     private var missingCheckFails = false
+    private var createFailure: CKError?
     private var heldCreateName: String?
     private var heldCreate: CheckedContinuation<Void, Never>?
     private var createHeldStarted: CheckedContinuation<Void, Never>?
@@ -30,6 +31,9 @@ actor FakeCloud: LibraryCloud {
         self.account = account
         profileValue = profile
     }
+
+    func failCreates(_ error: CKError?) { createFailure = error }
+    func createdNames() -> [String] { log }
 
     func setAccount(_ value: String?) { account = value }
     func setProfile(_ value: DictationProfile?) { profileValue = value }
@@ -73,6 +77,7 @@ actor FakeCloud: LibraryCloud {
             await withCheckedContinuation { heldCreate = $0; createHeldStarted?.resume(); createHeldStarted = nil }
         }
         createCount += 1
+        if let createFailure { throw createFailure }
         let name = record.recordID.recordName
         if let existing = records[name] {
             guard existing.encryptedValues["contentHash"] as? String == record.encryptedValues["contentHash"] as? String else {
@@ -155,9 +160,8 @@ enum TestSupport {
         let frames = AVAudioFrameCount(seconds * sampleRate)
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
         buffer.frameLength = frames
-        var generator = SystemRandomNumberGenerator()
         for index in 0..<Int(frames) {
-            let noise = Float.random(in: -0.2...0.2, using: &generator)
+            let noise = Float((index &* 1_103_515_245 &+ seed &+ 12_345) & 0xFFFF) / 65_535 * 0.4 - 0.2
             buffer.floatChannelData![0][index] = 0.4 * sin(Float(index + seed) * 0.05) + noise
         }
         return buffer

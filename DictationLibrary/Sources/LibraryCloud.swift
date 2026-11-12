@@ -94,9 +94,19 @@ struct CloudKitLibraryCloud: LibraryCloud {
 
     private var database: CKDatabase { get throws { try container.privateCloudDatabase } }
 
+    private func configured<T: Sendable>(_ body: @Sendable (CKDatabase) async throws -> T) async throws -> T {
+        let configuration = CKOperation.Configuration()
+        configuration.qualityOfService = .userInitiated
+        return try await database.configuredWith(configuration: configuration, body: body)
+    }
+
+    private func fetch<T: Sendable>(_ body: @Sendable (CKDatabase) async throws -> T) async throws -> T {
+        try await CloudKitRetry().run { try await configured(body) }
+    }
+
     func accountIdentifier() async throws -> String? {
-        switch try await container.accountStatus() {
-        case .available: return try await container.userRecordID().recordName
+        switch try await CloudKitRetry().run({ try await container.accountStatus() }) {
+        case .available: return try await CloudKitRetry().run { try await container.userRecordID().recordName }
         case .noAccount, .restricted: return nil
         default: throw DictationLibraryError.accountUnavailable
         }
@@ -104,15 +114,23 @@ struct CloudKitLibraryCloud: LibraryCloud {
 
     func profile() async throws -> DictationProfile? {
         let record: CKRecord
-        do { record = try await database.record(for: CKRecord.ID(recordName: DictationLibrarySchema.profileRecordName, zoneID: DictationLibrarySchema.zone)) }
+        do { record = try await fetch { try await $0.record(for: CKRecord.ID(recordName: DictationLibrarySchema.profileRecordName, zoneID: DictationLibrarySchema.zone)) } }
         catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound { return nil }
         var profile = try DictationLibrarySchema.value(DictationProfile.self, from: record)
         var cursor: CKQueryOperation.Cursor?
         var terms: [(Date, String, String)] = []
         repeat {
             let page: (matchResults: [(CKRecord.ID, Result<CKRecord, any Error>)], queryCursor: CKQueryOperation.Cursor?)
-            if let cursor { page = try await database.records(continuingMatchFrom: cursor, desiredKeys: ["text", "normalizedText", "createdAt", "modifiedAt", "isDeleted"], resultsLimit: 200) }
-            else { page = try await database.records(matching: CKQuery(recordType: "VocabularyEntry", predicate: NSPredicate(value: true)), inZoneWith: DictationLibrarySchema.zone, desiredKeys: ["text", "normalizedText", "createdAt", "modifiedAt", "isDeleted"], resultsLimit: 200) }
+            let currentCursor = cursor
+            page = try await fetch { database in
+                let page = if let currentCursor {
+                    try await database.records(continuingMatchFrom: currentCursor, desiredKeys: ["text", "normalizedText", "createdAt", "modifiedAt", "isDeleted"], resultsLimit: 200)
+                } else {
+                    try await database.records(matching: CKQuery(recordType: "VocabularyEntry", predicate: NSPredicate(value: true)), inZoneWith: DictationLibrarySchema.zone, desiredKeys: ["text", "normalizedText", "createdAt", "modifiedAt", "isDeleted"], resultsLimit: 200)
+                }
+                for (_, result) in page.matchResults { _ = try result.get() }
+                return page
+            }
             for (id, result) in page.matchResults {
                 let value = try result.get()
                 guard let text = value.encryptedValues["text"] as? String,
@@ -131,7 +149,7 @@ struct CloudKitLibraryCloud: LibraryCloud {
     func saveProfile(_ profile: DictationProfile) async throws {
         let id = CKRecord.ID(recordName: DictationLibrarySchema.profileRecordName, zoneID: DictationLibrarySchema.zone)
         let record: CKRecord
-        do { record = try await database.record(for: id) }
+        do { record = try await configured { try await $0.record(for: id) } }
         catch let error as CKError where error.code == .unknownItem {
             record = CKRecord(recordType: DictationLibrarySchema.profileRecordType, recordID: id)
         }
@@ -140,21 +158,38 @@ struct CloudKitLibraryCloud: LibraryCloud {
         let payload = try LibraryFiles.encode(preferences)
         record.encryptedValues["payload"] = payload
         record.encryptedValues["contentHash"] = LibraryFiles.hash(payload)
-        _ = try await database.modifyRecords(saving: [record], deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true).saveResults[id]?.get()
+        _ = try await configured { try await $0.modifyRecords(saving: [record], deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true).saveResults[id]?.get() }
     }
 
     func create(_ record: CKRecord) async throws {
-        do {
-            let response = try await database.modifyRecords(saving: [record], deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true)
-            guard let result = response.saveResults[record.recordID] else { throw DictationLibraryError.invalidRecord(record.recordID.recordName) }
-            _ = try result.get()
-        } catch let error as CKError where error.code == .serverRecordChanged {
-            guard let existing = error.serverRecord,
-                  existing.recordType == record.recordType,
-                  existing.encryptedValues["contentHash"] as? String == record.encryptedValues["contentHash"] as? String else {
-                throw DictationLibraryError.contentConflict(record.recordID.recordName)
+        try await CloudKitRetry().run {
+            do {
+                let response = try await configured { try await $0.modifyRecords(saving: [record], deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true) }
+                guard let result = response.saveResults[record.recordID] else { throw DictationLibraryError.invalidRecord(record.recordID.recordName) }
+                _ = try result.get()
+            } catch {
+                try Self.acknowledge(error, for: record)
             }
         }
+    }
+
+    static func acknowledge(_ error: any Error, for record: CKRecord) throws {
+        if let cloud = error as? CKError {
+            if cloud.code == .partialFailure, let item = cloud.partialErrorsByItemID?[record.recordID] {
+                try acknowledge(item, for: record)
+                return
+            }
+            if cloud.code == .serverRecordChanged {
+                guard let existing = cloud.serverRecord,
+                      existing.recordType == record.recordType,
+                      let expected = record.encryptedValues[DictationLibrarySchema.contentHashKey] as? String,
+                      existing.encryptedValues[DictationLibrarySchema.contentHashKey] as? String == expected else {
+                    throw DictationLibraryError.contentConflict(record.recordID.recordName)
+                }
+                return
+            }
+        }
+        throw error
     }
 
     func missing(_ ids: [CKRecord.ID]) async throws -> Set<CKRecord.ID> {
@@ -162,7 +197,13 @@ struct CloudKitLibraryCloud: LibraryCloud {
         for start in stride(from: 0, to: ids.count, by: 200) {
             let batch = Array(ids[start..<min(start + 200, ids.count)])
             let results: [CKRecord.ID: Result<CKRecord, any Error>]
-            do { results = try await database.records(for: batch, desiredKeys: []) }
+            do { results = try await fetch {
+                let results = try await $0.records(for: batch, desiredKeys: [])
+                for result in results.values {
+                    if case .failure(let error) = result, let cloud = error as? CKError, !Self.isMissing(cloud) { throw error }
+                }
+                return results
+            } }
             catch let error as CKError where Self.isMissing(error) { missing.formUnion(batch); continue }
             for id in batch {
                 switch results[id] {
@@ -177,13 +218,17 @@ struct CloudKitLibraryCloud: LibraryCloud {
     }
 
     private static func isMissing(_ error: CKError) -> Bool {
-        [.unknownItem, .zoneNotFound, .userDeletedZone].contains(error.code)
+        error.code == .unknownItem
     }
 
     func changes(since token: Data?, desiredKeys: [String]) async throws -> LibraryCloudPage {
         let previous = try token.map { try NSKeyedUnarchiver.unarchivedObject(ofClass: CKServerChangeToken.self, from: $0) }.flatMap { $0 }
         do {
-            let page = try await database.recordZoneChanges(inZoneWith: DictationLibrarySchema.zone, since: previous, desiredKeys: desiredKeys, resultsLimit: 200)
+            let page = try await fetch {
+                let page = try await $0.recordZoneChanges(inZoneWith: DictationLibrarySchema.zone, since: previous, desiredKeys: desiredKeys, resultsLimit: 200)
+                for result in page.modificationResultsByID.values { _ = try result.get() }
+                return page
+            }
             return try LibraryCloudPage(
                 records: page.modificationResultsByID.values.map { try $0.get().record },
                 deletedCount: page.deletions.count,
@@ -198,11 +243,32 @@ struct CloudKitLibraryCloud: LibraryCloud {
     }
 
     @concurrent func originalChunk(_ id: CKRecord.ID) async throws -> Data {
-        let record = try await database.record(for: id)
+        let record = try await fetch { try await $0.record(for: id) }
         guard record.recordType == DictationLibrarySchema.chunkRecordType,
               let asset = record[DictationLibrarySchema.originalAssetKey] as? CKAsset, let url = asset.fileURL else { throw DictationLibraryError.invalidRecord(id.recordName) }
         let bytes = try Data(contentsOf: url)
         guard record.encryptedValues["contentHash"] as? String == LibraryFiles.hash(bytes) else { throw DictationLibraryError.contentConflict(id.recordName) }
         return bytes
+    }
+}
+
+struct CloudKitRetry: Sendable {
+    var sleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    var jitter: @Sendable () -> Double = { Double.random(in: 0.5...1.5) }
+
+    func run<T>(_ operation: () async throws -> T) async throws -> T {
+        var waited = 0.0
+        for attempt in 0..<3 {
+            try Task.checkCancellation()
+            do { return try await operation() }
+            catch let error as CKError where [.networkFailure, .serviceUnavailable, .requestRateLimited, .zoneBusy].contains(error.code) {
+                guard attempt < 2 else { throw error }
+                let delay = error.retryAfterSeconds ?? pow(2, Double(attempt)) * jitter()
+                guard delay.isFinite, delay >= 0, waited + delay <= 15 else { throw error }
+                try await sleep(.seconds(delay))
+                waited += delay
+            }
+        }
+        preconditionFailure("Every retry attempt returns or throws")
     }
 }

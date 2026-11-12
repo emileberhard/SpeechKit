@@ -63,6 +63,16 @@ credentials, personal configuration, raw provider output or recordings.
   full, so capture never stops for audio CloudKit already holds. Unacknowledged,
   held and other-account originals are never released, and an original is
   released only after CloudKit confirms its capture and chunk records.
+- Pending captures are sealed, unpublished and owned by the current account;
+  status and publication share that predicate. Each pass recovers interrupted
+  captures before verifying its account, then publishes newest first, chunks
+  before capture metadata before results, one record per request. After a
+  successful send, persist its receipt even if cancelled, fenced by the account.
+  Pass-wide CloudKit/account failures stop publication and reclamation; other
+  errors remain typed capture failures. Hosts own logs and background execution.
+  Empty finished captures with results remain available to late writers in the
+  same store; recovery removes them after reopening. No-audio captures without
+  results are removed by recovery on the store actor.
 - One store owns its isolated directory and an in-memory capture index: loaded
   off the actor on first use, never persisted, never authoritative over disk.
   An operation marks each capture it changed for re-reading once it finishes;

@@ -1,3 +1,4 @@
+import CloudKit
 import Foundation
 import Testing
 @testable import DictationLibrary
@@ -463,8 +464,8 @@ import Testing
 
         await cloud.failMissingCheck(true)
         let full = try await TestSupport.verifiedStore(directory, cloud: cloud, capacity: uploaded.usedBytes)
-        let status = try await full.publishPending()
-        #expect(status.failures.map(\.captureID) == [capture.id])
+        await #expect(throws: DictationLibraryError.cloudFailure(domain: CKErrorDomain, code: CKError.serviceUnavailable.rawValue)) { try await full.publishPending() }
+        #expect(try await full.status().failures.isEmpty)
         #expect(try await full.entries().first { $0.id == capture.id }?.originalURL != nil)
 
         await cloud.failMissingCheck(false)
@@ -639,7 +640,7 @@ import Testing
         let reset = try await store.reseedPublication(session: #require(store.accountSession()))
         await cloud.releaseCreate()
         _ = try await publication.value
-        #expect(reset == 1)
+        #expect(reset == 0)
         #expect(await cloud.records.keys.contains(DictationLibrarySchema.captureName(capture.id)))
     }
 
@@ -683,7 +684,7 @@ import Testing
         let cloud = FakeCloud(profile: TestSupport.profile)
         let store = try await TestSupport.verifiedStore(directory, cloud: cloud)
         let writer = try await store.beginCapture(plan: store.makePlan(context: .chat, capabilities: TestSupport.capabilities()))
-        #expect(try await store.status().pendingCaptureCount == 1)
+        #expect(try await store.status().pendingCaptureCount == 0)
         let audio = TestSupport.buffer(seconds: 1)
         try writer.configure(format: audio.format)
         writer.append(audio)
@@ -712,6 +713,7 @@ import Testing
         #expect(try await reopened.publishPending().failures.map(\.captureID) == [capture.id])
 
         try intact.write(to: manifest)
+        _ = try await reopened.recoverInterruptedCaptures()
         let healed = try await reopened.status()
         #expect(healed.failures.isEmpty)
         #expect(healed.pendingCaptureCount == 0)
@@ -736,9 +738,9 @@ import Testing
         let names = (0..<3).map { DictationLibrarySchema.chunkName(capture.id, index: $0) }
         await cloud.failAfterSavingRecord(named: names[1])
 
-        let interrupted = try await store.publishPending()
-        #expect(interrupted.pendingCaptureCount == 1)
-        #expect(interrupted.failures.map(\.captureID) == [capture.id])
+        await #expect(throws: DictationLibraryError.cloudFailure(domain: CKErrorDomain, code: CKError.networkUnavailable.rawValue)) { try await store.publishPending() }
+        #expect(try await store.status().pendingCaptureCount == 1)
+        #expect(try await store.status().failures.isEmpty)
         let folder = writer.originalURL.deletingLastPathComponent()
         let receipts = try LibraryFiles.read([String].self, at: folder.appending(path: "published.json"))
         #expect(receipts.contains(names[0]))

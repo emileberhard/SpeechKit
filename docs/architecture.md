@@ -146,3 +146,42 @@ have different upload costs. Cancellation before delivery prevents delivery;
 normal teardown after delivery preserves learning. A retired store and the
 synced forget date fence late writes. A fetch is cancelled at the deadline but
 never joined, so uncooperative network work cannot hold up plain-text delivery.
+
+## Publication reliability
+
+A producer must publish a completed recording promptly without advertising an
+incomplete original. One pending predicate selects only sealed, unpublished
+captures in the current account. A pass owns interrupted-capture recovery before
+account verification, then publishes newest first, one immutable record per
+request: audio chunks, capture metadata, results. This preserves installed
+readers' capture-before-result ordering while making capture visibility imply
+complete audio. The schema and atomic create policy stay unchanged.
+
+The store actor alone removes empty captures. Finished empty writers with
+results remain addressable for late results during that store's lifetime;
+reopening discards their results with the empty capture. Empty captures without
+results can be removed immediately by recovery. Writer-side deletion would race
+result writes and recreate a manifest-less directory.
+
+A completed send's receipt is committed before cancellation is observed, after
+checking the account session. Every following send checks cancellation and
+verifies the account again. Whole-pass account, network, service, rate, quota and
+zone errors throw, so a stopped pass never reclaims originals. Other errors are
+isolated to a capture. Typed cloud and storage failures retain domain and code;
+the package emits no publication logs.
+
+The CloudKit adapter configures database calls at user-initiated QoS, with all
+other configuration defaults intact. Idempotent create and fetch operations get
+at most three attempts, retrying network failure, service unavailable, rate
+limiting and zone busy, with cancellable waits. Retry-After takes precedence over
+jittered exponential backoff; total sleep is capped at 15 seconds. A larger
+server delay stops this pass rather than retrying sooner than requested.
+Network-unavailable and profile writes are not retried. Atomic partial failures
+are unwrapped for the requested record so equal-hash conflicts acknowledge an
+already committed write. Hosts own background time across sealing, results and
+publication, and log one bounded summary per non-idle pass.
+
+The alternative of batching or long-lived CloudKit operations would add partial
+commit and asset-lifetime responsibilities. Existing immutable records and
+receipts provide resumability with smaller requests; pass durations can later
+show whether round trips justify changing that boundary.

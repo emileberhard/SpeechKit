@@ -163,7 +163,7 @@ public actor DictationArchive {
                 guard try await cloud.accountIdentifier() == account else { throw DictationLibraryError.accountChanged }
                 do { try await cloud.create(DictationLibrarySchema.record(type: DictationLibrarySchema.resultRecordType, name: DictationLibrarySchema.resultName(result.id), payload: payload, hash: LibraryFiles.hash(payload))) }
                 catch let error as DictationLibraryError { throw error }
-                catch { throw DictationLibraryError.cloudFailure("\((error as NSError).domain) \((error as NSError).code)") }
+                catch { throw DictationLibraryError.cloudFailure(domain: (error as NSError).domain, code: (error as NSError).code) }
                 guard try await cloud.accountIdentifier() == account else { throw DictationLibraryError.accountChanged }
                 let confirmed = folder.appending(path: "results/\(result.id.uuidString).json")
                 try RecordingFileSystem.createProtectedDirectory(confirmed.deletingLastPathComponent())
