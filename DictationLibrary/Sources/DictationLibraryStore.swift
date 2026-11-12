@@ -169,6 +169,7 @@ public actor DictationLibraryStore {
 
     private static func libraryError(_ error: any Error) -> any Error {
         if error is DictationLibraryError || error is CancellationError { return error }
+        if Task.isCancelled, let error = error as? CKError, error.code == .operationCancelled { return CancellationError() }
         return DictationLibraryError(error)
     }
 
@@ -615,7 +616,7 @@ public actor DictationLibraryStore {
             for (item, names) in batch {
                 let folder = item.folder.path
                 guard !names.contains(where: missingNames.contains) else {
-                    failures[folder] = .invalidRecord(names.first(where: missingNames.contains)!)
+                    failures[folder] = .cloudOriginalMissing
                     continue
                 }
                 guard capacity.usedBytes > retainedBytes, let original = releasableOriginal(item, account: lease.accountIdentifier) else { continue }
@@ -664,7 +665,7 @@ public actor DictationLibraryStore {
                     catch is ReceiptsReset { break }
                     catch {
                         let failure = DictationLibraryError(error)
-                        if failure.stopsPublication { throw failure }
+                        if failure.stopsPublication { throw Self.libraryError(error) }
                         publishFailures[summary.folder.path] = failure
                     }
                 }

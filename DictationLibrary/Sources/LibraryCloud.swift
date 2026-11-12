@@ -97,7 +97,8 @@ struct CloudKitLibraryCloud: LibraryCloud {
     private func configured<T: Sendable>(_ body: @Sendable (CKDatabase) async throws -> T) async throws -> T {
         let configuration = CKOperation.Configuration()
         configuration.qualityOfService = .userInitiated
-        return try await database.configuredWith(configuration: configuration, body: body)
+        do { return try await database.configuredWith(configuration: configuration, body: body) }
+        catch let error as CKError where error.code == .operationCancelled && Task.isCancelled { throw CancellationError() }
     }
 
     private func fetch<T: Sendable>(_ body: @Sendable (CKDatabase) async throws -> T) async throws -> T {
@@ -261,6 +262,7 @@ struct CloudKitRetry: Sendable {
         for attempt in 0..<3 {
             try Task.checkCancellation()
             do { return try await operation() }
+            catch let error as CKError where error.code == .operationCancelled && Task.isCancelled { throw CancellationError() }
             catch let error as CKError where [.networkFailure, .serviceUnavailable, .requestRateLimited, .zoneBusy].contains(error.code) {
                 guard attempt < 2 else { throw error }
                 let delay = error.retryAfterSeconds ?? pow(2, Double(attempt)) * jitter()

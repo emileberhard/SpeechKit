@@ -449,6 +449,7 @@ import Testing
         let full = try await TestSupport.verifiedStore(directory, cloud: cloud, capacity: uploaded.usedBytes)
         let status = try await full.publishPending()
         #expect(status.failures.map(\.captureID) == [lost.id])
+        #expect(status.failures.first?.error == .cloudOriginalMissing)
         let entries = try await full.entries()
         #expect(entries.first { $0.id == lost.id }?.originalURL != nil)
         #expect(entries.first { $0.id == held.id }?.originalURL == nil)

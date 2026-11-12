@@ -108,6 +108,7 @@ public enum DictationLibraryError: Error, Equatable, Sendable, LocalizedError {
     case unsupportedVersion(Int)
     case noAudio
     case recordingFinished
+    case cloudOriginalMissing
     case cloudDeletedRequiresDecision
     case notConfigured
     case cloudFailure(domain: String, code: Int)
@@ -131,6 +132,7 @@ public enum DictationLibraryError: Error, Equatable, Sendable, LocalizedError {
         case .unsupportedVersion(let version): "This data was written by a newer version (\(version)). Update the app."
         case .noAudio: "No audio was recorded."
         case .recordingFinished: "This recording has already finished."
+        case .cloudOriginalMissing: "iCloud no longer has all of this uploaded recording. Its local original is kept."
         case .cloudDeletedRequiresDecision: "The iCloud library was deleted. The local archive is intact; choose whether to restore it to iCloud."
         case .heldCapture: "This dictation is held because its account is unverified or different. Review it before it is added to this account."
         }

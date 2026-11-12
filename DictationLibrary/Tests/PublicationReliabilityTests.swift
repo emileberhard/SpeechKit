@@ -103,6 +103,23 @@ import Testing
         #expect(await cloud.createCount == creates)
     }
 
+    @Test func aCancelledCloudKitRequestDoesNotBecomeACaptureFailure() async throws {
+        let directory = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cloud = FakeCloud(profile: TestSupport.profile)
+        let store = try await TestSupport.verifiedStore(directory, cloud: cloud)
+        let capture = try await TestSupport.capture(store: store, plan: store.makePlan(context: .chat, capabilities: TestSupport.capabilities()), seconds: 0.2)
+        await cloud.failCreates(CKError(.operationCancelled))
+        await cloud.holdCreate(named: DictationLibrarySchema.chunkName(capture.id, index: 0))
+        let pass = Task { try await store.publishPending() }
+        await cloud.waitUntilCreateHeld()
+        pass.cancel()
+        await cloud.releaseCreate()
+        await #expect(throws: CancellationError.self) { try await pass.value }
+        #expect(try await store.status().failures.isEmpty)
+        #expect(try await store.status().pendingCaptureCount == 1)
+    }
+
     @Test func passFailuresDoNotStampCapturesAndConflictsDoNotBlockOtherCaptures() async throws {
         let directory = try TestSupport.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
