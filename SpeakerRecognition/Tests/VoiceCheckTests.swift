@@ -300,25 +300,29 @@ struct VoiceCheckTests {
     }
 
     @Test(.timeLimit(.minutes(1)), arguments: [
-        ("Mine.\nTheirs.", true, 1, "Mine.", VoiceFilterOutcome.Path.filtered),
-        ("Mine.\nTheirs.", false, 0, "Mine.\nTheirs.", .notHeard),
-        ("Mine. Theirs.", true, 0, "Mine. Theirs.", .notHeard),
+        ("Mine.\nOkay.", true, 1, "Mine.", VoiceFilterOutcome.Path.filtered),
+        ("Mine.\nOkay.", false, 0, "Mine.\nOkay.", .notHeard),
+        ("Mine. Okay.", true, 0, "Mine. Okay.", .notHeard),
     ] as [(String, Bool, Int, String, VoiceFilterOutcome.Path)])
     func aSpeakerTurnInTheTranscriptFetchesLabelsAndDropsAShortRemark(everyone: String, linesAreSpeakerTurns: Bool, fetches: Int,
                                                                      text: String, path: VoiceFilterOutcome.Path) async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let own = try SpeakerFixtures.speech("en-teen-note")
-        let end = own.count * 1_000 / 16_000
+        let own = try SpeakerFixtures.speech("en-short-long-rushed")
+        let remark = Array(try SpeakerFixtures.speech("en-teen-note").prefix(16_000))
+        var profile = VoiceProfile(modelVersion: SpeakerEmbedder.modelVersion, createdAt: .now)
+        let embedding = try await SpeakerFixtures.embedder().embedding(of: own)
+        for _ in 0..<15 { profile.learn(embedding, at: .now) }
+        let remarkStart = Duration.seconds(Double(own.count + 4_800 + 5_120) / 16_000)
         let phrases = [
-            SpeakerPhrase(speaker: 0, text: "Mine.", words: [.zero ..< .milliseconds(end - 700)]),
-            SpeakerPhrase(speaker: 1, text: "Theirs.", words: [.milliseconds(end - 600) ..< .milliseconds(end)]),
+            SpeakerPhrase(speaker: 0, text: "Mine.", words: [.zero ..< .seconds(Double(own.count) / 16_000)]),
+            SpeakerPhrase(speaker: 1, text: "Okay.", words: [remarkStart ..< remarkStart + .milliseconds(560)]),
         ]
         let fetched = OSAllocatedUnfairLock(initialState: 0)
         let store = VoiceProfileStore(accountDirectory: directory)
-        let check = try VoiceCheck(profile: await trustedProfile(), store: store, startedAt: .now,
+        let check = try VoiceCheck(profile: profile, store: store, startedAt: .now,
                                   onFailure: { _, _ in Issue.record("Unexpected failure") })
-        check.append(SpeakerFixtures.pcm16(own))
+        check.append(SpeakerFixtures.pcm16(own + [Float](repeating: 0, count: 4_800) + remark + SpeakerFixtures.silence))
         await check.finish { _ in
             fetched.withLock { $0 += 1 }
             return phrases
