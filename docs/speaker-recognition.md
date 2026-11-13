@@ -290,7 +290,12 @@ receive; all 409 succeeded.
 
 The provider's line break is an observed behaviour of the clean transcription
 style, not a documented contract. If it stopped, the trigger and rule 5 would
-go quiet and the watcher path would remain as before.
+go quiet and the watcher path would remain as before. It is also not
+deterministic at the margin: for one synthetic clip with a half-second remark,
+identical requests returned the break in some runs and not in others, and a
+vocabulary list changed the outcome. Real recordings were stable: repeating the
+69 screened and leak requests with a 57-term vocabulary list kept all fifteen
+breaks and added one, again only in recordings with another voice.
 
 ### Embeddings
 
