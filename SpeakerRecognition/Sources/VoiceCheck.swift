@@ -18,9 +18,12 @@ nonisolated struct VoiceCheckClock: Sendable {
 public actor VoiceCheck {
     public nonisolated static let maximumSamples = VoiceWatch.maximumSamples
 
+    private typealias Fetch = @Sendable (_ pcm16: Data) async throws -> [SpeakerPhrase]
+
     private enum State {
         case capturing
         case checking
+        case unflagged(VoiceRecording, fetch: Fetch)
         case decided(VoiceFilterOutcome)
         case failed(any Error)
         case requested
@@ -46,6 +49,8 @@ public actor VoiceCheck {
     private var replyTime: Duration?
     private var deliveryDeadline: ContinuousClock.Instant?
     private var everyone = ""
+    private var marksAnotherSpeaker = false
+    private var teaches = false
     private var recording: VoiceRecording?
 
     public init(profile: VoiceProfile, store: VoiceProfileStore, startedAt: Date,
@@ -94,29 +99,37 @@ public actor VoiceCheck {
         }
     }
 
-    public func resolve(everyone: String, waitingUpTo budget: Duration) async throws -> VoiceCheckResult {
+    public func resolve(everyone: String, linesAreSpeakerTurns: Bool, waitingUpTo budget: Duration) async throws -> VoiceCheckResult {
         try Task.checkCancellation()
         guard store.isCurrent(startedAt: startedAt) else {
             cancel()
             throw CancellationError()
         }
+        let spokenLines = VoiceFilter.spokenLines(in: everyone)
+        let marksAnotherSpeaker = linesAreSpeakerTurns && spokenLines > 1
+        let teaches = spokenLines > 0 && !marksAnotherSpeaker
+        if marksAnotherSpeaker, case .unflagged(let recording, let fetch) = state { request(recording, fetch: fetch) }
         let result: VoiceCheckResult
         switch state {
         case .cancelled, .resolving: throw CancellationError()
         case .delivered(let delivered): result = delivered
         case .capturing:
             watch.finish()
-            result = deliver(everyone: everyone, text: everyone, outcome: .undecided, learning: true)
+            result = deliver(everyone: everyone, text: everyone, outcome: .undecided, learning: teaches)
         case .checking:
             checking?.cancel()
-            result = deliver(everyone: everyone, text: everyone, outcome: .undecided, learning: true)
+            result = deliver(everyone: everyone, text: everyone, outcome: .undecided, learning: teaches)
+        case .unflagged:
+            result = deliver(everyone: everyone, text: everyone, outcome: .notHeard, learning: teaches)
         case .decided(let outcome):
-            result = deliver(everyone: everyone, text: everyone, outcome: outcome, learning: true)
+            result = deliver(everyone: everyone, text: everyone, outcome: outcome, learning: teaches)
         case .failed(let error):
             report(error)
             result = deliver(everyone: everyone, text: everyone, outcome: .failed, learning: false)
         case .requested:
             self.everyone = everyone
+            self.marksAnotherSpeaker = marksAnotherSpeaker
+            self.teaches = teaches
             deliveryDeadline = clock.now().advanced(by: budget)
             result = try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { continuation in
@@ -161,29 +174,33 @@ public actor VoiceCheck {
         continuation = nil
     }
 
-    private func checked(_ recording: VoiceRecording, fetch: @escaping @Sendable (_ pcm16: Data) async throws -> [SpeakerPhrase]) {
+    private func checked(_ recording: VoiceRecording, fetch: @escaping Fetch) {
         guard case .checking = state, store.isCurrent(startedAt: startedAt) else { return }
         if !recording.isComplete {
             state = .decided(.tooLong)
         } else if recording.requestsLabels {
-            self.recording = recording
-            state = .requested
-            requestedAt = clock.now()
-            let pcm = recording.audio.pcm
-            fetching = Task { [weak self, clock] in
-                do {
-                    let pcm16 = await pcm.data()
-                    try Task.checkCancellation()
-                    let phrases = try await fetch(pcm16)
-                    await self?.receivedReply(at: clock.now())
-                    return phrases
-                } catch {
-                    await self?.receivedReply(at: clock.now())
-                    throw error
-                }
-            }
+            request(recording, fetch: fetch)
         } else {
-            state = .decided(.notHeard)
+            state = .unflagged(recording, fetch: fetch)
+        }
+    }
+
+    private func request(_ recording: VoiceRecording, fetch: @escaping Fetch) {
+        self.recording = recording
+        state = .requested
+        requestedAt = clock.now()
+        let pcm = recording.audio.pcm
+        fetching = Task { [weak self, clock] in
+            do {
+                let pcm16 = await pcm.data()
+                try Task.checkCancellation()
+                let phrases = try await fetch(pcm16)
+                await self?.receivedReply(at: clock.now())
+                return phrases
+            } catch {
+                await self?.receivedReply(at: clock.now())
+                throw error
+            }
         }
     }
 
@@ -201,9 +218,11 @@ public actor VoiceCheck {
         let audio = recording!.audio
         let profile = profile.trustedMean!
         let everyone = everyone
+        let marksAnotherSpeaker = marksAnotherSpeaker
         filtering = Task { [weak self] in
             do {
-                let filtered = try await VoiceFilter.apply(phrases, everyone: everyone, audio: audio, profile: profile)
+                let filtered = try await VoiceFilter.apply(phrases, everyone: everyone, marksAnotherSpeaker: marksAnotherSpeaker,
+                                                           audio: audio, profile: profile)
                 await self?.filtered(.success(filtered))
             } catch {
                 await self?.filtered(.failure(error))
@@ -227,7 +246,7 @@ public actor VoiceCheck {
             switch filtered {
             case .success(let filtered):
                 result = deliver(everyone: everyone, text: filtered.text, outcome: filtered.outcome,
-                                 learning: filtered.outcome.labelCount <= 1 && filtered.outcome.droppedCount == 0)
+                                 learning: teaches && filtered.outcome.labelCount <= 1 && filtered.outcome.droppedCount == 0)
             case .failure(let error):
                 report(error)
                 result = deliver(everyone: everyone, text: everyone, outcome: .failed, learning: false)
@@ -267,8 +286,8 @@ public actor VoiceCheck {
         return result
     }
 
-    @concurrent public static func filter(pcm16: Data, phrases: [SpeakerPhrase]?, everyone: String, profile: VoiceProfile,
-                                         store: VoiceProfileStore, startedAt: Date,
+    @concurrent public static func filter(pcm16: Data, phrases: [SpeakerPhrase]?, everyone: String, linesAreSpeakerTurns: Bool,
+                                         profile: VoiceProfile, store: VoiceProfileStore, startedAt: Date,
                                          onFailure: @Sendable (VoiceFilterStage, any Error) -> Void) async -> VoiceCheckResult {
         guard store.isCurrent(startedAt: startedAt), !Task.isCancelled else {
             return VoiceCheckResult(text: everyone, everyone: everyone, outcome: .undecided, labelledReplyTime: nil)
@@ -282,7 +301,9 @@ public actor VoiceCheck {
         do {
             guard let phrases else { throw VoiceFilterError.voicesUnavailable }
             let audio = SpeakerAudio(embedder: try SpeakerEmbedder(modelURL: SpeakerEmbedder.requireModelURL()), pcm: PCM16Audio(pcm16))
-            let result = try await VoiceFilter.apply(phrases, everyone: everyone, audio: audio, profile: reference)
+            let result = try await VoiceFilter.apply(phrases, everyone: everyone,
+                                                     marksAnotherSpeaker: linesAreSpeakerTurns && VoiceFilter.spokenLines(in: everyone) > 1,
+                                                     audio: audio, profile: reference)
             guard store.isCurrent(startedAt: startedAt), !Task.isCancelled else {
                 return VoiceCheckResult(text: everyone, everyone: everyone, outcome: .undecided, labelledReplyTime: nil)
             }

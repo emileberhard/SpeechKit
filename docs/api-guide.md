@@ -859,8 +859,10 @@ and receives exactly the admitted 16 kHz mono PCM16 when labels are requested.
 Upload that argument for a transport that needs audio; a transport that already
 holds the audio may ignore it. Callers need no second recognition buffer.
 Incomplete, over-limit recordings never invoke the closure.
-`resolve(everyone:waitingUpTo:)` takes the additional delivery budget after the
-ordinary transcript arrives and returns `VoiceCheckResult` with `text`,
+`resolve(everyone:linesAreSpeakerTurns:waitingUpTo:)` takes the additional delivery budget after the
+ordinary transcript arrives. Pass `true` for `linesAreSpeakerTurns` only when the
+transcript's model breaks lines at speaker turns, as MAI-Transcribe-2 does; a
+second line with words then requests labels and withholds learning. It returns `VoiceCheckResult` with `text`,
 `everyone`, `outcome` and optional `labelledReplyTime`. Failures report a stage
 and the original error; they keep everyone's text. Cancellation
 before delivery throws `CancellationError` and prevents delivery. `cancel()`
@@ -874,7 +876,7 @@ isolated directory per account and call `retire()` before replacing its owner.
 `forget(learnedBefore:)` fences earlier checks and learning. History replay uses
 `beginHistory()`, `VoiceHistory.learn(from:in:decode:)`, then
 `learnHistory(_:in:)`; the decoder returns 16 kHz mono PCM16 from a caller-owned
-recording. `VoiceCheck.filter(pcm16:phrases:everyone:profile:store:startedAt:onFailure:)`
+recording. `VoiceCheck.filter(pcm16:phrases:everyone:linesAreSpeakerTurns:profile:store:startedAt:onFailure:)`
 is the batch form and does not relearn replayed recordings. See the
 [speaker recognition design](speaker-recognition.md) for the rules and model
 notice.

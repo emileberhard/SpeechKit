@@ -28,15 +28,15 @@ nonisolated public struct VoiceFilterOutcome: Sendable {
 }
 
 extension VoiceFilter {
-    @concurrent static func apply(_ phrases: [SpeakerPhrase], everyone: String, audio: SpeakerAudio, profile: SpeakerEmbedding)
-        async throws -> (text: String, outcome: VoiceFilterOutcome)
+    @concurrent static func apply(_ phrases: [SpeakerPhrase], everyone: String, marksAnotherSpeaker: Bool, audio: SpeakerAudio,
+                                  profile: SpeakerEmbedding) async throws -> (text: String, outcome: VoiceFilterOutcome)
     {
         let labels = labels(in: phrases)
         var embeddings: [Int: SpeakerEmbedding] = [:]
         for label in labels where label.isJudged {
             embeddings[label.speaker] = try await audio.embedding(of: label.evidenceSamples(sampleRate: KaldiFilterbank.sampleRate))
         }
-        guard let kept = keptSpeakers(of: labels, embeddings: embeddings, profile: profile) else {
+        guard let kept = keptSpeakers(of: labels, embeddings: embeddings, profile: profile, dropsUnjudged: marksAnotherSpeaker) else {
             return (everyone, VoiceFilterOutcome(path: .keptEveryone, labelCount: labels.count, droppedCount: 0))
         }
         return (text(of: phrases, keeping: kept), VoiceFilterOutcome(path: .filtered, labelCount: labels.count,

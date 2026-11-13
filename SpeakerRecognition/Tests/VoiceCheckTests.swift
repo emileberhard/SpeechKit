@@ -60,7 +60,7 @@ struct VoiceCheckTests {
             return []
         }
         await requested.wait()
-        let delivery = Task { try await check.resolve(everyone: "Everyone.", waitingUpTo: .seconds(3)) }
+        let delivery = Task { try await check.resolve(everyone: "Everyone.", linesAreSpeakerTurns: true, waitingUpTo: .seconds(3)) }
         await timerStarted.wait()
         now.withLock { $0 = $0.advanced(by: .milliseconds(2_200)) }
         await releaseFetch.open()
@@ -102,7 +102,7 @@ struct VoiceCheckTests {
             return phrases
         }
         await requested.wait()
-        let result = try await check!.resolve(everyone: "First. Second.", waitingUpTo: .seconds(5))
+        let result = try await check!.resolve(everyone: "First. Second.", linesAreSpeakerTurns: true, waitingUpTo: .seconds(5))
         #expect(result.outcome.labelCount == labelCount)
         if labelCount == 1 { #expect(result.outcome.droppedCount == 0) }
         await check!.cancel()
@@ -129,7 +129,7 @@ struct VoiceCheckTests {
         let start = Signal()
         let resolving = Task {
             await start.wait()
-            return try await check.resolve(everyone: "Everyone.", waitingUpTo: .seconds(2))
+            return try await check.resolve(everyone: "Everyone.", linesAreSpeakerTurns: true, waitingUpTo: .seconds(2))
         }
         caller.withLock { $0 = resolving }
         await start.open()
@@ -161,7 +161,7 @@ struct VoiceCheckTests {
             return [SpeakerPhrase(speaker: 0, text: "Late.", words: [])]
         }
         await requested.wait()
-        let resultTask = Task { try await check.resolve(everyone: "Everyone.", waitingUpTo: .seconds(2)) }
+        let resultTask = Task { try await check.resolve(everyone: "Everyone.", linesAreSpeakerTurns: true, waitingUpTo: .seconds(2)) }
         await timerStarted.wait()
         now.withLock { $0 = $0.advanced(by: .seconds(2)) }
         await fireTimer.open()
@@ -170,7 +170,7 @@ struct VoiceCheckTests {
         #expect(result.outcome.path == .failed && result.labelledReplyTime == .seconds(2))
         #expect(failures.withLock { $0 } == [.deadlineExceeded])
         await releaseFetch.open()
-        let repeated = try await check.resolve(everyone: "Replacement.", waitingUpTo: .seconds(2))
+        let repeated = try await check.resolve(everyone: "Replacement.", linesAreSpeakerTurns: true, waitingUpTo: .seconds(2))
         #expect(repeated.text == result.text && repeated.labelledReplyTime == result.labelledReplyTime)
         await check.cancel()
     }
@@ -197,7 +197,7 @@ struct VoiceCheckTests {
             throw VoiceFilterError.voicesUnavailable
         }
         await requested.wait()
-        let result = Task { try await check.resolve(everyone: "Everyone.", waitingUpTo: .seconds(2)) }
+        let result = Task { try await check.resolve(everyone: "Everyone.", linesAreSpeakerTurns: true, waitingUpTo: .seconds(2)) }
         await timerStarted.wait()
         await check.cancel()
         await #expect(throws: CancellationError.self) { try await result.value }
@@ -217,7 +217,7 @@ struct VoiceCheckTests {
                                   onFailure: { _, _ in failures.withLock { $0 += 1 } })
         check.append(SpeakerFixtures.pcm16(try SpeakerFixtures.speech("en-developer-message")))
         await check.finish { _ in throw VoiceFilterError.voicesUnavailable }
-        let result = try await check.resolve(everyone: "Everyone.", waitingUpTo: .seconds(2))
+        let result = try await check.resolve(everyone: "Everyone.", linesAreSpeakerTurns: true, waitingUpTo: .seconds(2))
         await check.cancel()
         while try await store.profile().candidates.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         #expect(result.text == "Everyone." && result.outcome.path == .undecided)
@@ -231,7 +231,8 @@ struct VoiceCheckTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = VoiceProfileStore(accountDirectory: directory)
         let result = await VoiceCheck.filter(pcm16: Data(repeating: 0, count: 32_000), phrases: phrases,
-                                            everyone: "Original transcript.", profile: try await trustedProfile(), store: store, startedAt: .now,
+                                            everyone: "Original transcript.", linesAreSpeakerTurns: true,
+                                            profile: try await trustedProfile(), store: store, startedAt: .now,
                                             onFailure: { _, _ in Issue.record("Unexpected failure") })
         #expect(result.text == "Original transcript." && result.everyone == "Original transcript.")
         #expect(result.outcome.path == .keptEveryone && result.outcome.droppedCount == 0)
@@ -266,9 +267,67 @@ struct VoiceCheckTests {
             return phrases
         }
         await requested.wait()
-        let result = try await check.resolve(everyone: "Mine. Other.", waitingUpTo: .seconds(5))
+        let result = try await check.resolve(everyone: "Mine. Other.", linesAreSpeakerTurns: true, waitingUpTo: .seconds(5))
         #expect(result.text == "Mine." && result.everyone == "Mine. Other.")
         #expect(result.outcome.path == .filtered && result.outcome.droppedCount == 1)
+        await check.cancel()
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: [
+        ("One voice.", true, 1),
+        ("One voice.\nA paragraph.", false, 1),
+        ("One voice.\nAnother voice.", true, 0),
+        ("", true, 0),
+        (" \n ", false, 0),
+    ] as [(String, Bool, Int)])
+    func onlyAOneVoiceTranscriptWithWordsTeachesTheProfile(everyone: String, linesAreSpeakerTurns: Bool, learned: Int) async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = VoiceProfileStore(accountDirectory: directory)
+        var check: VoiceCheck? = try VoiceCheck(profile: await store.profile(), store: store, startedAt: .now,
+                                               onFailure: { _, _ in Issue.record("Unexpected failure") })
+        weak let released = check
+        check!.append(SpeakerFixtures.pcm16(try SpeakerFixtures.speech("en-developer-message")))
+        await check!.finish { _ in
+            Issue.record("An untrusted profile must not fetch labels")
+            return []
+        }
+        let result = try await check!.resolve(everyone: everyone, linesAreSpeakerTurns: linesAreSpeakerTurns, waitingUpTo: .seconds(2))
+        check = nil
+        while released != nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(result.text == everyone && result.outcome.path == .undecided)
+        #expect(try await store.profile().candidates.count == learned)
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: [
+        ("Mine.\nTheirs.", true, 1, "Mine.", VoiceFilterOutcome.Path.filtered),
+        ("Mine.\nTheirs.", false, 0, "Mine.\nTheirs.", .notHeard),
+        ("Mine. Theirs.", true, 0, "Mine. Theirs.", .notHeard),
+    ] as [(String, Bool, Int, String, VoiceFilterOutcome.Path)])
+    func aSpeakerTurnInTheTranscriptFetchesLabelsAndDropsAShortRemark(everyone: String, linesAreSpeakerTurns: Bool, fetches: Int,
+                                                                     text: String, path: VoiceFilterOutcome.Path) async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let own = try SpeakerFixtures.speech("en-teen-note")
+        let end = own.count * 1_000 / 16_000
+        let phrases = [
+            SpeakerPhrase(speaker: 0, text: "Mine.", words: [.zero ..< .milliseconds(end - 700)]),
+            SpeakerPhrase(speaker: 1, text: "Theirs.", words: [.milliseconds(end - 600) ..< .milliseconds(end)]),
+        ]
+        let fetched = OSAllocatedUnfairLock(initialState: 0)
+        let store = VoiceProfileStore(accountDirectory: directory)
+        let check = try VoiceCheck(profile: await trustedProfile(), store: store, startedAt: .now,
+                                  onFailure: { _, _ in Issue.record("Unexpected failure") })
+        check.append(SpeakerFixtures.pcm16(own))
+        await check.finish { _ in
+            fetched.withLock { $0 += 1 }
+            return phrases
+        }
+        await check.checking?.value
+        #expect(fetched.withLock { $0 } == 0)
+        let result = try await check.resolve(everyone: everyone, linesAreSpeakerTurns: linesAreSpeakerTurns, waitingUpTo: .seconds(5))
+        #expect(result.text == text && result.everyone == everyone && result.outcome.path == path)
+        #expect(result.outcome.droppedCount == fetches && fetched.withLock { $0 } == fetches)
         await check.cancel()
     }
 
@@ -285,7 +344,7 @@ struct VoiceCheckTests {
             return []
         }
         await check.checking?.value
-        let result = try await check.resolve(everyone: "Original.", waitingUpTo: .seconds(2))
+        let result = try await check.resolve(everyone: "Original.", linesAreSpeakerTurns: true, waitingUpTo: .seconds(2))
         #expect(result.text == "Original." && result.outcome.path == .tooLong)
         await check.cancel()
     }
@@ -299,7 +358,7 @@ struct VoiceCheckTests {
                                                onFailure: { _, _ in Issue.record("Unexpected failure") })
         weak let released = check
         check!.append(SpeakerFixtures.pcm16(try SpeakerFixtures.speech("en-developer-message")))
-        let result = try await check!.resolve(everyone: "Original.", waitingUpTo: .seconds(2))
+        let result = try await check!.resolve(everyone: "Original.", linesAreSpeakerTurns: true, waitingUpTo: .seconds(2))
         check = nil
         let deadline = ContinuousClock.now.advanced(by: .seconds(10))
         while released != nil && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
@@ -332,7 +391,7 @@ struct VoiceCheckTests {
         }
         var (check, model) = try await makeCheck() as (VoiceCheck?, ModelLifetime)
         await requested.wait()
-        let resultTask = Task { [check = check!] in try await check.resolve(everyone: "Original.", waitingUpTo: .seconds(2)) }
+        let resultTask = Task { [check = check!] in try await check.resolve(everyone: "Original.", linesAreSpeakerTurns: true, waitingUpTo: .seconds(2)) }
         await timerStarted.wait()
         now.withLock { $0 = $0.advanced(by: .seconds(2)) }
         await fireTimer.open()
@@ -368,7 +427,7 @@ struct VoiceCheckTests {
             return []
         }
         await requested.wait()
-        let resultTask = Task { try await check.resolve(everyone: "Original.", waitingUpTo: .seconds(2)) }
+        let resultTask = Task { try await check.resolve(everyone: "Original.", linesAreSpeakerTurns: true, waitingUpTo: .seconds(2)) }
         caller.withLock { $0 = resultTask }
         await timerStarted.wait()
         now.withLock { $0 = $0.advanced(by: .seconds(2)) }

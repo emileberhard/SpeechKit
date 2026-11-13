@@ -260,16 +260,33 @@ struct VoiceFilterTests {
             3: axis(3),
             4: axis(0, 0.4, plus: 4, 0.9165),
         ]
-        #expect(VoiceFilter.keptSpeakers(of: labels, embeddings: embeddings, profile: axis(0)) == [0, 2, 3, 4])
-        #expect(VoiceFilter.keptSpeakers(of: Array(labels.dropFirst()), embeddings: embeddings, profile: axis(0)) == nil)
+        #expect(VoiceFilter.keptSpeakers(of: labels, embeddings: embeddings, profile: axis(0), dropsUnjudged: false) == [0, 2, 3, 4])
+        #expect(VoiceFilter.keptSpeakers(of: labels, embeddings: embeddings, profile: axis(0), dropsUnjudged: true) == [0, 2, 4])
+        for dropsUnjudged in [false, true] {
+            #expect(VoiceFilter.keptSpeakers(of: Array(labels.dropFirst()), embeddings: embeddings, profile: axis(0),
+                                             dropsUnjudged: dropsUnjudged) == nil)
+        }
     }
 
     @Test func anotherPersonIsDroppedAndShortLabelsAreKept() {
         let phrases = [phrase(0, "Mine.", seconds: 5), phrase(1, "Theirs.", seconds: 3, at: 6_000), phrase(2, "Hm?", seconds: 1, at: 10_000)]
         let labels = VoiceFilter.labels(in: phrases)
-        let kept = VoiceFilter.keptSpeakers(of: labels, embeddings: [0: axis(0), 1: axis(1)], profile: axis(0))
+        let kept = VoiceFilter.keptSpeakers(of: labels, embeddings: [0: axis(0), 1: axis(1)], profile: axis(0), dropsUnjudged: false)
         #expect(kept == [0, 2])
         #expect(VoiceFilter.text(of: phrases, keeping: kept ?? []) == "Mine. Hm?")
+    }
+
+    @Test func aShortRemarkIsDroppedOnlyWhenTheTranscriptMarkedAnotherSpeakerAndTheUserIsRecognized() {
+        let phrases = [phrase(0, "Mine.", seconds: 5), phrase(1, "Hm?", seconds: 1, at: 6_000)]
+        let labels = VoiceFilter.labels(in: phrases)
+        #expect(VoiceFilter.keptSpeakers(of: labels, embeddings: [0: axis(0)], profile: axis(0), dropsUnjudged: true) == [0])
+        #expect(VoiceFilter.keptSpeakers(of: labels, embeddings: [0: axis(0)], profile: axis(0), dropsUnjudged: false) == nil)
+        #expect(VoiceFilter.keptSpeakers(of: labels, embeddings: [0: axis(1)], profile: axis(0), dropsUnjudged: true) == nil)
+    }
+
+    @Test(arguments: [("", 0), (" \n\t", 0), ("One.", 1), ("One.\n", 1), ("One.\n\n Two.\r\nThree.", 3)])
+    func spokenLinesCountLinesWithWords(transcript: String, lines: Int) {
+        #expect(VoiceFilter.spokenLines(in: transcript) == lines)
     }
 
     @Test(arguments: [
@@ -280,7 +297,7 @@ struct VoiceFilterTests {
     ] as [(String, [Int: SpeakerEmbedding])])
     func everythingIsKeptWhenNoLabelIsRejectedTwice(_ name: String, embeddings: [Int: SpeakerEmbedding]) {
         let labels = VoiceFilter.labels(in: [phrase(0, "a", seconds: 4), phrase(1, "b", seconds: 4, at: 5_000)])
-        #expect(VoiceFilter.keptSpeakers(of: labels, embeddings: embeddings, profile: axis(0)) == nil, "\(name)")
+        #expect(VoiceFilter.keptSpeakers(of: labels, embeddings: embeddings, profile: axis(0), dropsUnjudged: true) == nil, "\(name)")
     }
 
 

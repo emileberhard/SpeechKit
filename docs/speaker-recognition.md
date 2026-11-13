@@ -11,19 +11,29 @@ Failure, timeout and doubt preserve everyone's words.
 
 `VoiceCheck.append` feeds the watcher while capturing. After all audio has been
 admitted, `finish(fetch:)` closes the watcher. With a trusted profile, it requests
-labels only if the finished watcher asks for them; the closure runs at most once
-and independently of the plain transcript. It receives the admitted 16 kHz mono
+labels as soon as the finished watcher asks for them, independently of the plain
+transcript. Otherwise `resolve` requests them when the plain transcript marks
+another speaker. The closure runs at most once. It receives the admitted 16 kHz mono
 PCM16, the same samples the filter embeds. A transport that uploads audio uses
 this argument without keeping a second recognition buffer; a transport that
 already holds the audio ignores it. Incomplete, over-limit recordings never
 invoke the closure. An unfinished watcher never delays
-the plain transcript. `resolve(everyone:waitingUpTo:)` starts the caller's added
+the plain transcript. `resolve(everyone:linesAreSpeakerTurns:waitingUpTo:)` starts the caller's added
 wait budget when everyone's text arrives, filters labels if available, and
 returns a typed result containing delivered text, everyone's text, outcome and
 labelled-reply elapsed time. Every attempted label check reports elapsed time,
 including failures and timeouts. Delivery races an independent timer; it does
 not join a fetch that ignores cancellation. Late replies cannot replace a
 result. The injected clock is internal and exists to verify this boundary.
+
+The caller states whether its transcript breaks lines at speaker turns, which
+MAI-Transcribe-2 does and paragraph-formatting models do not. When it does, a
+transcript with more than one line that has words marks another speaker. The
+package owns that reading; the caller owns the fact about its provider. A marked
+speaker has three effects: a trusted profile requests labels even when the
+watcher heard nothing, the filter may drop a label too short to judge (rule 5
+below), and the recording does not teach the profile. A transcript without
+words never teaches either: there is no speech of the user's to learn from.
 
 `cancel()` before delivery cancels recognition and prevents delivery. After
 delivery it leaves learning alone, because normal session teardown follows
@@ -76,7 +86,8 @@ labels to keep.
    Its evidence is its own speech: its word spans, padded and
    concatenated, longest first, up to the model's 10 s window, and tiled when
    shorter. The sequence retains the provider PCM for this recording.
-2. A label with under 1 s of speech is kept unjudged. A label with 1–2 s
+2. A label with under 1 s of speech is never embedded or judged; rule 5
+   decides whether it is kept. A label with 1–2 s
    can anchor only at 0.50 against the profile, and can be rejected only below
    0.25 against both references. The uncertain interval stays kept. Labels of
    at least 2 s retain the existing 0.35 anchor and rejection bars.
@@ -90,7 +101,12 @@ labels to keep.
    rescues the user's own voice when a change in microphone or room confuses
    the profile; the profile rescues it when diarization splits the user
    unevenly.
-5. If nothing is dropped, which is the case on a false alarm, the first
+5. A label under 1 s is dropped only when the plain transcript marked another
+   speaker and an anchor exists: the provider attributes those words to someone
+   else twice, in the plain line break and in the label, while the user is
+   recognized in the same recording. Without both, it is kept. Its audio is too
+   short to embed reliably, so no embedding can veto the drop.
+6. If nothing is dropped, which is the case on a false alarm, the first
    request's text is delivered, so a false alarm costs latency but never
    changes the text. Otherwise the kept phrases are joined by a space. The
    combined `text` is the same phrases, but with line breaks the model inserts
@@ -242,6 +258,40 @@ or 2.19% of one core across the dictation. It remained inside the existing
 accumulated window work. Delivery also retains its readiness check and can
 fail open without waiting for a lagging watcher.
 
+### Speaker turns in the transcript, 2026-11-13
+
+A reported leak was a 0.6 s remark by another person inside the user's
+dictation: below the 1 s bar, unflagged by the watcher, with a profile that had
+lost trust because a recording without words had been learned as a miss. The
+same private harness replayed the 2026-11-11 sample through this engine. A new
+plain MAI-Transcribe-2 request per recording supplied the transcript the apps
+receive; all 409 succeeded.
+
+- **Line breaks:** none of the 340 ordinary recordings has one, so the new
+  trigger adds no request there. Thirteen of 67 screened recordings and both
+  leaks have one, each in a recording with an assigned other-voice label. The
+  plain transcript and the labelled reply's combined text agree on whether a
+  break exists in all 118 labelled recordings with a speaker assignment.
+- **Requests:** of 21 recordings with another voice, the watcher flags 12, the
+  transcript 15, either 18. The watcher still catches three that have no line
+  break, so the transcript is an added trigger, not a replacement.
+- **Other voices:** with requests as they happen live, 20 of 24 assigned
+  other-voice labels are dropped, up from 12. Five of the eight under 1 s are
+  dropped; the other three lack a line break or an anchor. Supplying labels for
+  every recording would drop 21.
+- **The user's words:** none of 119 assigned own-voice labels is dropped. All
+  fourteen under 1 s sit in recordings without an anchor, so rule 5 never
+  reaches them here. A recording that splits the user into a long and a short
+  label and also breaks a line would lose the short part; the sample holds no
+  such recording.
+- **Learning:** 4 of the 192 ordinary learning candidates come from recordings
+  whose transcript has no words. Each scores below 0.10 against the profile and
+  was a trust miss; none teaches now.
+
+The provider's line break is an observed behaviour of the clean transcription
+style, not a documented contract. If it stopped, the trigger and rule 5 would
+go quiet and the watcher path would remain as before.
+
 ### Embeddings
 
 `SpeakerEmbedder` owns one Core ML model: WeSpeaker ResNet34-LM, 256
@@ -287,7 +337,8 @@ account's profile stays dormant while another account is signed in. Deleting
 the iOS app deletes the file; on macOS it stays in Application Support until
 Forget My Voice.
 
-- **Learning** requires at least 5 s of speech and no profile-independent
+- **Learning** requires a transcript with words that marks no other speaker,
+  at least 5 s of speech and no profile-independent
   evidence of mixed voices: the original piece comparison uses 0.35, while the window rule requires
   two supported windows below 0.05 against each other, each supported by another
   window at 0.50. A successful labelled pass can only withhold learning:
@@ -340,7 +391,9 @@ The caller supplies the added wait after the ordinary transcript. A service
 that already retains audio and a second device upload have different latency
 costs. The calibration above recommends `min(6 s, 4 s + 5 ms per second of
 audio)` for Mumla's retained-audio transport; the caller applies that policy.
-A second device upload needs its own measured budget. The profile format is
+A second device upload needs its own measured budget. A request triggered by
+the transcript starts when the budget does, so the whole labelled reply must fit
+inside it; the measured reply times above were taken from request start. The profile format is
 preserved. The producer admission cap bounds a previously unbounded backlog.
 Batch filtering now always preserves the caller's original text when no label
 is dropped, including empty or unjudged labelled replies.
@@ -350,7 +403,8 @@ is dropped, including empty or unjudged labelled replies.
 Offline Swift Testing retains the original synthetic model, filterbank,
 segmentation, filtering, trust and history assertions. Package-level sequence
 regressions verify bounded delivery with an uncooperative fetch, stable delivery
-after late replies, cancellation and post-delivery learning. A reference
+after late replies, cancellation, post-delivery learning, the transcript's
+speaker-turn trigger and the transcripts that may teach. A reference
 inference runs through the package bundle on macOS and an iOS simulator; model
 loads, builds and device performance are separate evidence. App wire decoding
 and session integration remain consumer tests.

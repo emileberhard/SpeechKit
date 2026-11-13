@@ -45,7 +45,8 @@ nonisolated enum VoiceFilter {
         }
     }
 
-    static func keptSpeakers(of labels: [SpeakerLabel], embeddings: [Int: SpeakerEmbedding], profile: SpeakerEmbedding) -> Set<Int>? {
+    static func keptSpeakers(of labels: [SpeakerLabel], embeddings: [Int: SpeakerEmbedding], profile: SpeakerEmbedding,
+                             dropsUnjudged: Bool) -> Set<Int>? {
         let judged = labels.filter(\.isJudged).compactMap { label in
             embeddings[label.speaker].map { (label: label, embedding: $0) }
         }
@@ -53,14 +54,20 @@ nonisolated enum VoiceFilter {
             $0.embedding.similarity(to: profile) >= ($0.label.speechMilliseconds < longLabelMilliseconds ? shortAnchorThreshold : sameVoiceThreshold)
         }
         guard let anchor = anchors.max(by: { $0.embedding.similarity(to: profile) < $1.embedding.similarity(to: profile) }) else { return nil }
-        let dropped = Set(judged.filter { label, embedding in
+        let rejected = judged.filter { label, embedding in
             let threshold = label.speechMilliseconds < longLabelMilliseconds ? shortRejectionThreshold : sameVoiceThreshold
             return label.speaker != anchor.label.speaker
                 && embedding.similarity(to: anchor.embedding) < threshold
                 && embedding.similarity(to: profile) < threshold
-        }.map { $0.label.speaker })
+        }.map { $0.label.speaker }
+        let unjudged = dropsUnjudged ? labels.filter { !$0.isJudged && $0.speaker != anchor.label.speaker }.map(\.speaker) : []
+        let dropped = Set(rejected + unjudged)
         guard !dropped.isEmpty else { return nil }
         return Set(labels.map(\.speaker)).subtracting(dropped)
+    }
+
+    static func spokenLines(in transcript: String) -> Int {
+        transcript.split(whereSeparator: \.isNewline).count { $0.contains { !$0.isWhitespace } }
     }
 
     static func text(of phrases: [SpeakerPhrase]) -> String {
