@@ -1,12 +1,17 @@
 import Foundation
 import SpeechKit
 
+public nonisolated enum VoiceLabelRequest: String, Sendable {
+    case watcher
+    case transcript
+}
+
 public nonisolated struct VoiceCheckResult: Sendable {
     public let text: String
     public let everyone: String
     public let outcome: VoiceFilterOutcome
     public let labelledReplyTime: Duration?
-    public let transcriptRequestedLabels: Bool
+    public let labelRequest: VoiceLabelRequest?
 }
 
 nonisolated struct VoiceCheckClock: Sendable {
@@ -49,7 +54,7 @@ public actor VoiceCheck {
     private var requestedAt: ContinuousClock.Instant?
     private var replyTime: Duration?
     private var deliveryDeadline: ContinuousClock.Instant?
-    private var transcriptRequestedLabels = false
+    private var labelRequest: VoiceLabelRequest?
     private var recording: VoiceRecording?
 
     public init(profile: VoiceProfile, store: VoiceProfileStore, startedAt: Date,
@@ -106,8 +111,7 @@ public actor VoiceCheck {
         }
         let voices = TranscriptVoices(everyone, linesAreSpeakerTurns: linesAreSpeakerTurns)
         if voices.marksAnotherSpeaker, case .unflagged(let recording, let fetch) = state {
-            transcriptRequestedLabels = true
-            request(recording, fetch: fetch)
+            request(recording, fetch: fetch, by: .transcript)
         }
         let result: VoiceCheckResult
         switch state {
@@ -176,14 +180,15 @@ public actor VoiceCheck {
         if !recording.isComplete {
             state = .decided(.tooLong)
         } else if recording.requestsLabels {
-            request(recording, fetch: fetch)
+            request(recording, fetch: fetch, by: .watcher)
         } else {
             state = .unflagged(recording, fetch: fetch)
         }
     }
 
-    private func request(_ recording: VoiceRecording, fetch: @escaping Fetch) {
+    private func request(_ recording: VoiceRecording, fetch: @escaping Fetch, by labelRequest: VoiceLabelRequest) {
         self.recording = recording
+        self.labelRequest = labelRequest
         state = .requested
         requestedAt = clock.now()
         let pcm = recording.audio.pcm
@@ -261,7 +266,7 @@ public actor VoiceCheck {
     private func deliver(everyone: String, text: String, outcome: VoiceFilterOutcome, learning learns: Bool) -> VoiceCheckResult {
         let result = VoiceCheckResult(text: text, everyone: everyone, outcome: outcome,
                                      labelledReplyTime: requestedAt.map { replyTime ?? $0.duration(to: clock.now()) },
-                                     transcriptRequestedLabels: transcriptRequestedLabels)
+                                     labelRequest: labelRequest)
         recording = nil
         state = .delivered(result)
         if learns {
@@ -286,7 +291,7 @@ public actor VoiceCheck {
                                          profile: VoiceProfile, store: VoiceProfileStore, startedAt: Date,
                                          onFailure: @Sendable (VoiceFilterStage, any Error) -> Void) async -> VoiceCheckResult {
         func unfiltered(_ outcome: VoiceFilterOutcome) -> VoiceCheckResult {
-            VoiceCheckResult(text: everyone, everyone: everyone, outcome: outcome, labelledReplyTime: nil, transcriptRequestedLabels: false)
+            VoiceCheckResult(text: everyone, everyone: everyone, outcome: outcome, labelledReplyTime: nil, labelRequest: nil)
         }
         guard store.isCurrent(startedAt: startedAt), !Task.isCancelled else { return unfiltered(.undecided) }
         guard pcm16.count / 2 <= VoiceWatch.maximumSamples else { return unfiltered(.tooLong) }
@@ -299,7 +304,7 @@ public actor VoiceCheck {
                                                      audio: audio, profile: reference)
             guard store.isCurrent(startedAt: startedAt), !Task.isCancelled else { return unfiltered(.undecided) }
             return VoiceCheckResult(text: result.text, everyone: everyone, outcome: result.outcome, labelledReplyTime: nil,
-                                    transcriptRequestedLabels: false)
+                                    labelRequest: nil)
         } catch {
             guard store.isCurrent(startedAt: startedAt), !Task.isCancelled else { return unfiltered(.undecided) }
             onFailure(.filter, error)

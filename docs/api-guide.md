@@ -866,8 +866,8 @@ ordinary transcript arrives. Pass `true` for `linesAreSpeakerTurns` only when th
 transcript's model breaks lines at speaker turns, as MAI-Transcribe-2's clean
 style does; a second line with words then requests labels and withholds
 learning. It returns `VoiceCheckResult` with `text`, `everyone`, `outcome`,
-optional `labelledReplyTime` and `transcriptRequestedLabels`, which is true
-when that line break, not the watcher, started the label request. Failures report a stage
+optional `labelledReplyTime` and optional `labelRequest`, which says whether
+the watcher or that line break started the label request. Failures report a stage
 and the original error; they keep everyone's text. Cancellation
 before delivery throws `CancellationError` and prevents delivery. `cancel()`
 after delivery preserves learning, so normal session teardown is safe. A successful

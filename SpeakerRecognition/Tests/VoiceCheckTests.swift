@@ -265,7 +265,7 @@ struct VoiceCheckTests {
                                             store: VoiceProfileStore(accountDirectory: directory), startedAt: .now,
                                             onFailure: { _, _ in Issue.record("Unexpected failure") })
         #expect(result.text == text && result.everyone == "Mine.\nOkay." && result.outcome.path == path)
-        #expect(!result.transcriptRequestedLabels)
+        #expect(result.labelRequest == nil)
     }
 
     @Test(.timeLimit(.minutes(1)))
@@ -299,7 +299,7 @@ struct VoiceCheckTests {
         await requested.wait()
         let result = try await check.resolve(everyone: "Mine. Other.", linesAreSpeakerTurns: true, waitingUpTo: .seconds(5))
         #expect(result.text == "Mine." && result.everyone == "Mine. Other.")
-        #expect(result.outcome.path == .filtered && result.outcome.droppedCount == 1 && !result.transcriptRequestedLabels)
+        #expect(result.outcome.path == .filtered && result.outcome.droppedCount == 1 && result.labelRequest == .watcher)
         await check.cancel()
     }
 
@@ -356,14 +356,20 @@ struct VoiceCheckTests {
         let result = try await check!.resolve(everyone: everyone, linesAreSpeakerTurns: linesAreSpeakerTurns, waitingUpTo: .seconds(5))
         #expect(result.text == text && result.everyone == everyone && result.outcome.path == path)
         #expect(result.outcome.droppedCount == fetches && fetched.withLock { $0 } == fetches)
-        #expect(result.transcriptRequestedLabels == (fetches == 1))
+        #expect(result.labelRequest == (fetches == 1 ? .transcript : nil))
         check = nil
         while released != nil { try await Task.sleep(for: .milliseconds(10)) }
         if fetches == 1 { #expect(try await store.profile().candidates.isEmpty) }
     }
 
-    @Test(.timeLimit(.minutes(1)), arguments: [("One voice.", true), ("", false), ("[music]", false)])
-    func aTrustedProfileLearnsOnlyFromATranscriptWithWords(everyone: String, learns: Bool) async throws {
+    @Test(.timeLimit(.minutes(1)), arguments: [
+        ("One voice.", nil, true),
+        ("", nil, false),
+        ("[music]", nil, false),
+        ("One voice.\nAnother voice.", VoiceLabelRequest.transcript, false),
+    ] as [(String, VoiceLabelRequest?, Bool)])
+    func aTrustedProfileLearnsOnlyFromAOneVoiceTranscriptWithWords(everyone: String, labelRequest: VoiceLabelRequest?,
+                                                                   learns: Bool) async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let own = try SpeakerFixtures.speech("en-developer-message")
@@ -376,15 +382,14 @@ struct VoiceCheckTests {
                                                onFailure: { _, _ in Issue.record("Unexpected failure") })
         weak let released = check
         check!.append(SpeakerFixtures.pcm16(own))
-        await check!.finish { _ in
-            Issue.record("One recognized voice must not fetch labels")
-            return []
-        }
+        let oneSpeaker = [SpeakerPhrase(speaker: 0, text: "One voice.", words: [.zero ..< .seconds(Double(own.count) / 16_000)])]
+        await check!.finish { _ in oneSpeaker }
         await check!.checking?.value
-        let result = try await check!.resolve(everyone: everyone, linesAreSpeakerTurns: true, waitingUpTo: .seconds(2))
+        let result = try await check!.resolve(everyone: everyone, linesAreSpeakerTurns: true, waitingUpTo: .seconds(5))
         check = nil
         while released != nil { try await Task.sleep(for: .milliseconds(10)) }
-        #expect(result.outcome.path == .notHeard)
+        #expect(result.labelRequest == labelRequest && result.text == everyone)
+        #expect(result.outcome.path == (labelRequest == nil ? .notHeard : .keptEveryone))
         #expect((try await store.profile() != before) == learns)
     }
 
