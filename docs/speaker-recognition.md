@@ -102,10 +102,13 @@ labels to keep.
    the profile; the profile rescues it when diarization splits the user
    unevenly.
 5. A label under 1 s is dropped only when the plain transcript marked another
-   speaker and an anchor exists: the provider attributes those words to someone
-   else twice, in the plain line break and in the label, while the user is
-   recognized in the same recording. Without both, it is kept. Its audio is too
-   short to embed reliably, so no embedding can veto the drop.
+   speaker and an anchor exists: the line break is the provider's evidence that
+   another voice is present, and the user is recognized in the same recording.
+   The break and the label split are one provider judgement, not two
+   confirmations. Without both conditions the label is kept. Its audio is too
+   short to embed reliably, so no embedding can veto the drop: a turn-boundary
+   error can cost the user a word or two next to the remark, bounded below 1 s
+   per label and recoverable from everyone's text.
 6. If nothing is dropped, which is the case on a false alarm, the first
    request's text is delivered, so a false alarm costs latency but never
    changes the text. Otherwise the kept phrases are joined by a space. The
@@ -283,7 +286,10 @@ receive; all 409 succeeded.
   fourteen under 1 s sit in recordings without an anchor, so rule 5 never
   reaches them here. A recording that splits the user into a long and a short
   label and also breaks a line would lose the short part; the sample holds no
-  such recording.
+  such recording. The five labels rule 5 drops are all assigned to another
+  voice; where the labelled text was kept (two of five), each is a
+  self-contained remark between the user's phrases, and the other three
+  coincide with a short separate line of the plain transcript.
 - **Learning:** 4 of the 192 ordinary learning candidates come from recordings
   whose transcript has no words. Each scores below 0.10 against the profile and
   was a trust miss; none teaches now.
@@ -293,9 +299,12 @@ style, not a documented contract. If it stopped, the trigger and rule 5 would
 go quiet and the watcher path would remain as before. It is also not
 deterministic at the margin: for one synthetic clip with a half-second remark,
 identical requests returned the break in some runs and not in others, and a
-vocabulary list changed the outcome. Real recordings were stable: repeating the
+vocabulary list or an Opus round trip of the audio changed the outcome. Real
+recordings were stable: repeating the
 69 screened and leak requests with a 57-term vocabulary list kept all fifteen
-breaks and added one, again only in recordings with another voice.
+breaks and added one, again only in recordings with another voice. One synthetic
+voice saying "new paragraph" and "new line", in English and in Swedish, got
+those words back with no break in six of six requests.
 
 ### Embeddings
 
@@ -342,7 +351,8 @@ account's profile stays dormant while another account is signed in. Deleting
 the iOS app deletes the file; on macOS it stays in Application Support until
 Forget My Voice.
 
-- **Learning** requires a transcript with words that marks no other speaker,
+- **Learning** from a dictation requires a transcript with words that marks no
+  other speaker,
   at least 5 s of speech and no profile-independent
   evidence of mixed voices: the original piece comparison uses 0.35, while the window rule requires
   two supported windows below 0.05 against each other, each supported by another
@@ -381,7 +391,13 @@ Forget My Voice.
   downloading any, that started after Forget My Voice, finished before the
   profile was created and last 5 seconds to 2 minutes. The store owns that
   window. They go through `VoiceListener`, the same path as live dictation, so
-  the same rules pick candidates. Up to 30 are applied oldest first in one
+  the same audio rules pick candidates. Replay has no transcripts, so the
+  transcript gate does not apply: a recording without words can still become a
+  candidate and count as a trust miss. In the 2026-11-13 replay 4 of 192
+  candidates were such recordings, so about one replay in five would end with a
+  miss among the last ten and stay untrusted for up to ten more dictations.
+  Closing it needs the transcript on `VoiceHistoryRecording`, so the rule keeps
+  one owner. Up to 30 are applied oldest first in one
   write that sets `historySince` to the oldest one's start, so a later Forget
   My Voice still deletes them. A profile that was replaced meanwhile, already
   learned from history or already trusted takes nothing, an account switch

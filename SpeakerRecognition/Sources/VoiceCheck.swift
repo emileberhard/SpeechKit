@@ -6,6 +6,7 @@ public nonisolated struct VoiceCheckResult: Sendable {
     public let everyone: String
     public let outcome: VoiceFilterOutcome
     public let labelledReplyTime: Duration?
+    public let transcriptRequestedLabels: Bool
 }
 
 nonisolated struct VoiceCheckClock: Sendable {
@@ -27,7 +28,7 @@ public actor VoiceCheck {
         case decided(VoiceFilterOutcome)
         case failed(any Error)
         case requested
-        case resolving
+        case resolving(everyone: String, TranscriptVoices)
         case delivered(VoiceCheckResult)
         case cancelled
     }
@@ -48,9 +49,7 @@ public actor VoiceCheck {
     private var requestedAt: ContinuousClock.Instant?
     private var replyTime: Duration?
     private var deliveryDeadline: ContinuousClock.Instant?
-    private var everyone = ""
-    private var marksAnotherSpeaker = false
-    private var teaches = false
+    private var transcriptRequestedLabels = false
     private var recording: VoiceRecording?
 
     public init(profile: VoiceProfile, store: VoiceProfileStore, startedAt: Date,
@@ -105,36 +104,34 @@ public actor VoiceCheck {
             cancel()
             throw CancellationError()
         }
-        let spokenLines = VoiceFilter.spokenLines(in: everyone)
-        let marksAnotherSpeaker = linesAreSpeakerTurns && spokenLines > 1
-        let teaches = spokenLines > 0 && !marksAnotherSpeaker
-        if marksAnotherSpeaker, case .unflagged(let recording, let fetch) = state { request(recording, fetch: fetch) }
+        let voices = TranscriptVoices(everyone, linesAreSpeakerTurns: linesAreSpeakerTurns)
+        if voices.marksAnotherSpeaker, case .unflagged(let recording, let fetch) = state {
+            transcriptRequestedLabels = true
+            request(recording, fetch: fetch)
+        }
         let result: VoiceCheckResult
         switch state {
         case .cancelled, .resolving: throw CancellationError()
         case .delivered(let delivered): result = delivered
         case .capturing:
             watch.finish()
-            result = deliver(everyone: everyone, text: everyone, outcome: .undecided, learning: teaches)
+            result = deliver(everyone: everyone, text: everyone, outcome: .undecided, learning: voices.teaches)
         case .checking:
             checking?.cancel()
-            result = deliver(everyone: everyone, text: everyone, outcome: .undecided, learning: teaches)
+            result = deliver(everyone: everyone, text: everyone, outcome: .undecided, learning: voices.teaches)
         case .unflagged:
-            result = deliver(everyone: everyone, text: everyone, outcome: .notHeard, learning: teaches)
+            result = deliver(everyone: everyone, text: everyone, outcome: .notHeard, learning: voices.teaches)
         case .decided(let outcome):
-            result = deliver(everyone: everyone, text: everyone, outcome: outcome, learning: teaches)
+            result = deliver(everyone: everyone, text: everyone, outcome: outcome, learning: voices.teaches)
         case .failed(let error):
             report(error)
             result = deliver(everyone: everyone, text: everyone, outcome: .failed, learning: false)
         case .requested:
-            self.everyone = everyone
-            self.marksAnotherSpeaker = marksAnotherSpeaker
-            self.teaches = teaches
             deliveryDeadline = clock.now().advanced(by: budget)
             result = try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { continuation in
                     self.continuation = continuation
-                    state = .resolving
+                    state = .resolving(everyone: everyone, voices)
                     let fetch = fetching!
                     filtering = Task { [weak self] in
                         do {
@@ -213,15 +210,13 @@ public actor VoiceCheck {
     }
 
     private func receivedPhrases(_ phrases: [SpeakerPhrase]) {
-        guard case .resolving = state else { return }
+        guard case .resolving(let everyone, let voices) = state else { return }
         guard store.isCurrent(startedAt: startedAt) else { return cancel() }
         let audio = recording!.audio
         let profile = profile.trustedMean!
-        let everyone = everyone
-        let marksAnotherSpeaker = marksAnotherSpeaker
         filtering = Task { [weak self] in
             do {
-                let filtered = try await VoiceFilter.apply(phrases, everyone: everyone, marksAnotherSpeaker: marksAnotherSpeaker,
+                let filtered = try await VoiceFilter.apply(phrases, everyone: everyone, marksAnotherSpeaker: voices.marksAnotherSpeaker,
                                                            audio: audio, profile: profile)
                 await self?.filtered(.success(filtered))
             } catch {
@@ -236,7 +231,7 @@ public actor VoiceCheck {
     }
 
     private func filtered(_ filtered: Result<(text: String, outcome: VoiceFilterOutcome), any Error>) {
-        guard case .resolving = state else { return }
+        guard case .resolving(let everyone, let voices) = state else { return }
         guard store.isCurrent(startedAt: startedAt) else { return cancel() }
         let result: VoiceCheckResult
         if let deadline = deliveryDeadline, clock.now() >= deadline {
@@ -246,7 +241,7 @@ public actor VoiceCheck {
             switch filtered {
             case .success(let filtered):
                 result = deliver(everyone: everyone, text: filtered.text, outcome: filtered.outcome,
-                                 learning: teaches && filtered.outcome.labelCount <= 1 && filtered.outcome.droppedCount == 0)
+                                 learning: voices.teaches && filtered.outcome.labelCount <= 1 && filtered.outcome.droppedCount == 0)
             case .failure(let error):
                 report(error)
                 result = deliver(everyone: everyone, text: everyone, outcome: .failed, learning: false)
@@ -265,7 +260,8 @@ public actor VoiceCheck {
 
     private func deliver(everyone: String, text: String, outcome: VoiceFilterOutcome, learning learns: Bool) -> VoiceCheckResult {
         let result = VoiceCheckResult(text: text, everyone: everyone, outcome: outcome,
-                                     labelledReplyTime: requestedAt.map { replyTime ?? $0.duration(to: clock.now()) })
+                                     labelledReplyTime: requestedAt.map { replyTime ?? $0.duration(to: clock.now()) },
+                                     transcriptRequestedLabels: transcriptRequestedLabels)
         recording = nil
         state = .delivered(result)
         if learns {
@@ -289,31 +285,25 @@ public actor VoiceCheck {
     @concurrent public static func filter(pcm16: Data, phrases: [SpeakerPhrase]?, everyone: String, linesAreSpeakerTurns: Bool,
                                          profile: VoiceProfile, store: VoiceProfileStore, startedAt: Date,
                                          onFailure: @Sendable (VoiceFilterStage, any Error) -> Void) async -> VoiceCheckResult {
-        guard store.isCurrent(startedAt: startedAt), !Task.isCancelled else {
-            return VoiceCheckResult(text: everyone, everyone: everyone, outcome: .undecided, labelledReplyTime: nil)
+        func unfiltered(_ outcome: VoiceFilterOutcome) -> VoiceCheckResult {
+            VoiceCheckResult(text: everyone, everyone: everyone, outcome: outcome, labelledReplyTime: nil, transcriptRequestedLabels: false)
         }
-        guard pcm16.count / 2 <= VoiceWatch.maximumSamples else {
-            return VoiceCheckResult(text: everyone, everyone: everyone, outcome: .tooLong, labelledReplyTime: nil)
-        }
-        guard let reference = profile.trustedMean else {
-            return VoiceCheckResult(text: everyone, everyone: everyone, outcome: .undecided, labelledReplyTime: nil)
-        }
+        guard store.isCurrent(startedAt: startedAt), !Task.isCancelled else { return unfiltered(.undecided) }
+        guard pcm16.count / 2 <= VoiceWatch.maximumSamples else { return unfiltered(.tooLong) }
+        guard let reference = profile.trustedMean else { return unfiltered(.undecided) }
         do {
             guard let phrases else { throw VoiceFilterError.voicesUnavailable }
             let audio = SpeakerAudio(embedder: try SpeakerEmbedder(modelURL: SpeakerEmbedder.requireModelURL()), pcm: PCM16Audio(pcm16))
-            let result = try await VoiceFilter.apply(phrases, everyone: everyone,
-                                                     marksAnotherSpeaker: linesAreSpeakerTurns && VoiceFilter.spokenLines(in: everyone) > 1,
+            let voices = TranscriptVoices(everyone, linesAreSpeakerTurns: linesAreSpeakerTurns)
+            let result = try await VoiceFilter.apply(phrases, everyone: everyone, marksAnotherSpeaker: voices.marksAnotherSpeaker,
                                                      audio: audio, profile: reference)
-            guard store.isCurrent(startedAt: startedAt), !Task.isCancelled else {
-                return VoiceCheckResult(text: everyone, everyone: everyone, outcome: .undecided, labelledReplyTime: nil)
-            }
-            return VoiceCheckResult(text: result.text, everyone: everyone, outcome: result.outcome, labelledReplyTime: nil)
+            guard store.isCurrent(startedAt: startedAt), !Task.isCancelled else { return unfiltered(.undecided) }
+            return VoiceCheckResult(text: result.text, everyone: everyone, outcome: result.outcome, labelledReplyTime: nil,
+                                    transcriptRequestedLabels: false)
         } catch {
-            guard store.isCurrent(startedAt: startedAt), !Task.isCancelled else {
-                return VoiceCheckResult(text: everyone, everyone: everyone, outcome: .undecided, labelledReplyTime: nil)
-            }
+            guard store.isCurrent(startedAt: startedAt), !Task.isCancelled else { return unfiltered(.undecided) }
             onFailure(.filter, error)
-            return VoiceCheckResult(text: everyone, everyone: everyone, outcome: .failed, labelledReplyTime: nil)
+            return unfiltered(.failed)
         }
     }
 }

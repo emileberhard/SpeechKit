@@ -858,12 +858,16 @@ admitted. The closure has type `@Sendable (Data) async throws -> [SpeakerPhrase]
 and receives exactly the admitted 16 kHz mono PCM16 when labels are requested.
 Upload that argument for a transport that needs audio; a transport that already
 holds the audio may ignore it. Callers need no second recognition buffer.
-Incomplete, over-limit recordings never invoke the closure.
+Incomplete, over-limit recordings never invoke the closure. The check holds the
+closure until `resolve`, `cancel()` or its own release, so the closure must not
+strongly capture the check's owner.
 `resolve(everyone:linesAreSpeakerTurns:waitingUpTo:)` takes the additional delivery budget after the
 ordinary transcript arrives. Pass `true` for `linesAreSpeakerTurns` only when the
-transcript's model breaks lines at speaker turns, as MAI-Transcribe-2 does; a
-second line with words then requests labels and withholds learning. It returns `VoiceCheckResult` with `text`,
-`everyone`, `outcome` and optional `labelledReplyTime`. Failures report a stage
+transcript's model breaks lines at speaker turns, as MAI-Transcribe-2's clean
+style does; a second line with words then requests labels and withholds
+learning. It returns `VoiceCheckResult` with `text`, `everyone`, `outcome`,
+optional `labelledReplyTime` and `transcriptRequestedLabels`, which is true
+when that line break, not the watcher, started the label request. Failures report a stage
 and the original error; they keep everyone's text. Cancellation
 before delivery throws `CancellationError` and prevents delivery. `cancel()`
 after delivery preserves learning, so normal session teardown is safe. A successful

@@ -13,6 +13,17 @@ nonisolated struct SpeakerLabel: Equatable, Sendable {
     }
 }
 
+nonisolated struct TranscriptVoices: Equatable, Sendable {
+    let marksAnotherSpeaker: Bool
+    let teaches: Bool
+
+    init(_ transcript: String, linesAreSpeakerTurns: Bool) {
+        let spokenLines = transcript.split(whereSeparator: \.isNewline).count { TranscriptSoundEvents.containsSpeech(String($0)) }
+        marksAnotherSpeaker = linesAreSpeakerTurns && spokenLines > 1
+        teaches = spokenLines > 0 && !marksAnotherSpeaker
+    }
+}
+
 nonisolated enum VoiceFilter {
     static let sameVoiceThreshold: Float = 0.35
     static let minimumJudgedMilliseconds = 1_000
@@ -60,14 +71,10 @@ nonisolated enum VoiceFilter {
                 && embedding.similarity(to: anchor.embedding) < threshold
                 && embedding.similarity(to: profile) < threshold
         }.map { $0.label.speaker }
-        let unjudged = dropsUnjudged ? labels.filter { !$0.isJudged && $0.speaker != anchor.label.speaker }.map(\.speaker) : []
+        let unjudged = dropsUnjudged ? labels.filter { !$0.isJudged }.map(\.speaker) : []
         let dropped = Set(rejected + unjudged)
         guard !dropped.isEmpty else { return nil }
         return Set(labels.map(\.speaker)).subtracting(dropped)
-    }
-
-    static func spokenLines(in transcript: String) -> Int {
-        transcript.split(whereSeparator: \.isNewline).count { $0.contains { !$0.isWhitespace } }
     }
 
     static func text(of phrases: [SpeakerPhrase]) -> String {

@@ -284,9 +284,20 @@ struct VoiceFilterTests {
         #expect(VoiceFilter.keptSpeakers(of: labels, embeddings: [0: axis(1)], profile: axis(0), dropsUnjudged: true) == nil)
     }
 
-    @Test(arguments: [("", 0), (" \n\t", 0), ("One.", 1), ("One.\n", 1), ("One.\n\n Two.\r\nThree.", 3)])
-    func spokenLinesCountLinesWithWords(transcript: String, lines: Int) {
-        #expect(VoiceFilter.spokenLines(in: transcript) == lines)
+    @Test(arguments: [
+        ("", true, false, false),
+        (" \n\t", true, false, false),
+        ("[music]", true, false, false),
+        ("…", true, false, false),
+        ("One.", true, false, true),
+        ("One.\n", true, false, true),
+        ("One.\n[laughter]", true, false, true),
+        ("One.\n\n Two.\r\nThree.", true, true, false),
+        ("One.\nTwo.", false, false, true),
+    ] as [(String, Bool, Bool, Bool)])
+    func onlyASecondLineWithWordsMarksAnotherSpeaker(transcript: String, linesAreSpeakerTurns: Bool, marksAnotherSpeaker: Bool, teaches: Bool) {
+        let voices = TranscriptVoices(transcript, linesAreSpeakerTurns: linesAreSpeakerTurns)
+        #expect(voices.marksAnotherSpeaker == marksAnotherSpeaker && voices.teaches == teaches)
     }
 
     @Test(arguments: [

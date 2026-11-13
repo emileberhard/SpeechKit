@@ -38,6 +38,20 @@ struct VoiceCheckTests {
         return SpeakerFixtures.pcm16(samples)
     }
 
+    private func shortRemark() async throws -> (pcm16: Data, phrases: [SpeakerPhrase], profile: VoiceProfile) {
+        let own = try SpeakerFixtures.speech("en-short-long-rushed")
+        let remark = Array(try SpeakerFixtures.speech("en-teen-note").prefix(16_000))
+        var profile = VoiceProfile(modelVersion: SpeakerEmbedder.modelVersion, createdAt: .now)
+        let embedding = try await SpeakerFixtures.embedder().embedding(of: own)
+        for _ in 0..<15 { profile.learn(embedding, at: .now) }
+        let remarkStart = Duration.seconds(Double(own.count + 4_800 + 5_120) / 16_000)
+        let phrases = [
+            SpeakerPhrase(speaker: 0, text: "Mine.", words: [.zero ..< .seconds(Double(own.count) / 16_000)]),
+            SpeakerPhrase(speaker: 1, text: "Okay.", words: [remarkStart ..< remarkStart + .milliseconds(560)]),
+        ]
+        return (SpeakerFixtures.pcm16(own + [Float](repeating: 0, count: 4_800) + remark + SpeakerFixtures.silence), phrases, profile)
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func aSlowReplyWithinTheCallerBudgetIsKeptAndTimed() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -238,6 +252,22 @@ struct VoiceCheckTests {
         #expect(result.outcome.path == .keptEveryone && result.outcome.droppedCount == 0)
     }
 
+    @Test(.timeLimit(.minutes(1)), arguments: [
+        (true, "Mine.", VoiceFilterOutcome.Path.filtered),
+        (false, "Mine.\nOkay.", .keptEveryone),
+    ] as [(Bool, String, VoiceFilterOutcome.Path)])
+    func batchFilteringDropsAShortRemarkOnlyAtASpeakerTurn(linesAreSpeakerTurns: Bool, text: String, path: VoiceFilterOutcome.Path) async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fixture = try await shortRemark()
+        let result = await VoiceCheck.filter(pcm16: fixture.pcm16, phrases: fixture.phrases, everyone: "Mine.\nOkay.",
+                                            linesAreSpeakerTurns: linesAreSpeakerTurns, profile: fixture.profile,
+                                            store: VoiceProfileStore(accountDirectory: directory), startedAt: .now,
+                                            onFailure: { _, _ in Issue.record("Unexpected failure") })
+        #expect(result.text == text && result.everyone == "Mine.\nOkay." && result.outcome.path == path)
+        #expect(!result.transcriptRequestedLabels)
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func filteringThroughThePublicCheckDropsAnotherSyntheticVoice() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -269,7 +299,7 @@ struct VoiceCheckTests {
         await requested.wait()
         let result = try await check.resolve(everyone: "Mine. Other.", linesAreSpeakerTurns: true, waitingUpTo: .seconds(5))
         #expect(result.text == "Mine." && result.everyone == "Mine. Other.")
-        #expect(result.outcome.path == .filtered && result.outcome.droppedCount == 1)
+        #expect(result.outcome.path == .filtered && result.outcome.droppedCount == 1 && !result.transcriptRequestedLabels)
         await check.cancel()
     }
 
@@ -279,6 +309,7 @@ struct VoiceCheckTests {
         ("One voice.\nAnother voice.", true, 0),
         ("", true, 0),
         (" \n ", false, 0),
+        ("[music]", true, 0),
     ] as [(String, Bool, Int)])
     func onlyAOneVoiceTranscriptWithWordsTeachesTheProfile(everyone: String, linesAreSpeakerTurns: Bool, learned: Int) async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -308,31 +339,53 @@ struct VoiceCheckTests {
                                                                      text: String, path: VoiceFilterOutcome.Path) async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let own = try SpeakerFixtures.speech("en-short-long-rushed")
-        let remark = Array(try SpeakerFixtures.speech("en-teen-note").prefix(16_000))
-        var profile = VoiceProfile(modelVersion: SpeakerEmbedder.modelVersion, createdAt: .now)
-        let embedding = try await SpeakerFixtures.embedder().embedding(of: own)
-        for _ in 0..<15 { profile.learn(embedding, at: .now) }
-        let remarkStart = Duration.seconds(Double(own.count + 4_800 + 5_120) / 16_000)
-        let phrases = [
-            SpeakerPhrase(speaker: 0, text: "Mine.", words: [.zero ..< .seconds(Double(own.count) / 16_000)]),
-            SpeakerPhrase(speaker: 1, text: "Okay.", words: [remarkStart ..< remarkStart + .milliseconds(560)]),
-        ]
+        let fixture = try await shortRemark()
+        let phrases = fixture.phrases
         let fetched = OSAllocatedUnfairLock(initialState: 0)
         let store = VoiceProfileStore(accountDirectory: directory)
-        let check = try VoiceCheck(profile: profile, store: store, startedAt: .now,
-                                  onFailure: { _, _ in Issue.record("Unexpected failure") })
-        check.append(SpeakerFixtures.pcm16(own + [Float](repeating: 0, count: 4_800) + remark + SpeakerFixtures.silence))
-        await check.finish { _ in
+        var check: VoiceCheck? = try VoiceCheck(profile: fixture.profile, store: store, startedAt: .now,
+                                               onFailure: { _, _ in Issue.record("Unexpected failure") })
+        weak let released = check
+        check!.append(fixture.pcm16)
+        await check!.finish { _ in
             fetched.withLock { $0 += 1 }
             return phrases
         }
-        await check.checking?.value
+        await check!.checking?.value
         #expect(fetched.withLock { $0 } == 0)
-        let result = try await check.resolve(everyone: everyone, linesAreSpeakerTurns: linesAreSpeakerTurns, waitingUpTo: .seconds(5))
+        let result = try await check!.resolve(everyone: everyone, linesAreSpeakerTurns: linesAreSpeakerTurns, waitingUpTo: .seconds(5))
         #expect(result.text == text && result.everyone == everyone && result.outcome.path == path)
         #expect(result.outcome.droppedCount == fetches && fetched.withLock { $0 } == fetches)
-        await check.cancel()
+        #expect(result.transcriptRequestedLabels == (fetches == 1))
+        check = nil
+        while released != nil { try await Task.sleep(for: .milliseconds(10)) }
+        if fetches == 1 { #expect(try await store.profile().candidates.isEmpty) }
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: [("One voice.", true), ("", false), ("[music]", false)])
+    func aTrustedProfileLearnsOnlyFromATranscriptWithWords(everyone: String, learns: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let own = try SpeakerFixtures.speech("en-developer-message")
+        let embedding = try await SpeakerFixtures.embedder().embedding(of: own)
+        let store = VoiceProfileStore(accountDirectory: directory)
+        for _ in 0..<15 { try await store.learn(embedding, startedAt: .now) }
+        let before = try await store.profile()
+        #expect(before.isTrusted && !before.isFrozen)
+        var check: VoiceCheck? = try VoiceCheck(profile: before, store: store, startedAt: .now,
+                                               onFailure: { _, _ in Issue.record("Unexpected failure") })
+        weak let released = check
+        check!.append(SpeakerFixtures.pcm16(own))
+        await check!.finish { _ in
+            Issue.record("One recognized voice must not fetch labels")
+            return []
+        }
+        await check!.checking?.value
+        let result = try await check!.resolve(everyone: everyone, linesAreSpeakerTurns: true, waitingUpTo: .seconds(2))
+        check = nil
+        while released != nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(result.outcome.path == .notHeard)
+        #expect((try await store.profile() != before) == learns)
     }
 
     @Test(.timeLimit(.minutes(1)))
