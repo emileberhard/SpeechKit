@@ -21,6 +21,18 @@ struct PCM16FLACFileTests {
         #expect(Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength))) == samples)
     }
 
+    @Test func aShortRecordingFailsRatherThanEncodingAnIncompletePrefix() throws {
+        let url = URL.temporaryDirectory.appending(path: "\(UUID()).pcm")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data([1, 2]).write(to: url)
+        let input = try FileHandle(forReadingFrom: url)
+        defer { try? input.close() }
+        #expect(throws: SpeechKitError.self) {
+            try PCM16AudioEncoder.data(pcm16From: input, byteCount: 4, sampleRate: 16_000,
+                fileExtension: "flac", settings: [AVFormatIDKey: kAudioFormatFLAC])
+        }
+    }
+
     @Test(arguments: [(Data(), 16_000), (Data([1]), 16_000), (Data([1, 2]), 0)])
     func invalidPCMIsRejected(pcm: Data, sampleRate: Int) {
         #expect(throws: SpeechKitError.self) { try PCM16FLACFile.data(pcmData: pcm, sampleRate: sampleRate) }

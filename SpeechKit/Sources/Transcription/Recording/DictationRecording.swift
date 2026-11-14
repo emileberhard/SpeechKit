@@ -113,50 +113,8 @@ extension DictationRecordingError: LocalizedError {
 }
 
 enum PCM16AACEncoder {
-    private static let bitRate = 32_000
-    private static let framesPerBuffer: AVAudioFrameCount = 16_384
-
     static func m4aData(pcm16From input: FileHandle, byteCount: Int, sampleRate: Int) throws -> Data {
-        let url = FileManager.default.temporaryDirectory.appending(path: "\(UUID().uuidString).m4a")
-        defer { try? FileManager.default.removeItem(at: url) }
-        try encode(byteCount, from: input, sampleRate: sampleRate, to: url)
-        return try Data(contentsOf: url)
-    }
-
-    private static func encode(_ byteCount: Int, from input: FileHandle, sampleRate: Int, to url: URL) throws {
-        let file = try AVAudioFile(
-            forWriting: url,
-            settings: [
-                AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: Double(sampleRate),
-                AVNumberOfChannelsKey: 1,
-                AVEncoderBitRateKey: bitRate,
-            ],
-            commonFormat: .pcmFormatInt16,
-            interleaved: true
-        )
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: framesPerBuffer),
-              let channel = buffer.int16ChannelData?[0] else {
-            throw SpeechKitError.invalidRequest("AAC export could not allocate a PCM16 buffer")
-        }
-        let bytesPerBuffer = Int(framesPerBuffer) * MemoryLayout<Int16>.size
-        try withExtendedLifetime(file) {
-            var remaining = byteCount
-            while remaining > 0 {
-                let requested = min(bytesPerBuffer, remaining)
-                try autoreleasepool {
-                    guard let chunk = try input.read(upToCount: requested), chunk.count == requested else {
-                        throw SpeechKitError.invalidRequest("Recording audio ended before its expected length")
-                    }
-                    chunk.withUnsafeBytes { bytes in
-                        guard let base = bytes.baseAddress else { return }
-                        UnsafeMutableRawPointer(channel).copyMemory(from: base, byteCount: requested)
-                    }
-                    buffer.frameLength = AVAudioFrameCount(requested / MemoryLayout<Int16>.size)
-                    try file.write(from: buffer)
-                }
-                remaining -= requested
-            }
-        }
+        try PCM16AudioEncoder.data(pcm16From: input, byteCount: byteCount, sampleRate: sampleRate,
+            fileExtension: "m4a", settings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVEncoderBitRateKey: 32_000])
     }
 }
