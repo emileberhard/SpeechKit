@@ -69,6 +69,8 @@ public actor ProgressiveTranscriptionSession {
         self.upload.start()
     }
 
+    var uploadedBodyByteCount: Int64 { upload.uploadedBodyByteCount }
+
     deinit { upload.cancel() }
 
     public func appendAudio(_ pcmData: Data) throws {

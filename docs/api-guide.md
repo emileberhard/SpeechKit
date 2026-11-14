@@ -525,7 +525,10 @@ do {
   finished body awaits a response. Idle capture with no queued bytes does not
   count as a stall. Azure saved-recording uploads use the same 8-second upload
   stall limit and a 30-second response deadline after the body is sent.
-  Shared URLSession configuration values are unchanged.
+  Shared URLSession configuration values are unchanged. The progressive realtime
+  adapter exposes `uploadedBodyByteCount` for content-free stop diagnostics:
+  `nil` before an upload exists, otherwise the transport's actual body-byte
+  count, retained after disconnect. This includes multipart and WAV framing.
 - **Cancelling.** `cancel()` tears the session down. Cancelling the task that
   awaits `finish()` throws `CancellationError`, never partial text.
 - **Ownership.** The dictation connects and disconnects its session; do not

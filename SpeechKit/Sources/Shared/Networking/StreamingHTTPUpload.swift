@@ -15,6 +15,7 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
         var task: URLSessionUploadTask?
         var session: URLSession?
         var data = Data()
+        var sentBytes: Int64 = 0
         var bodyClosed = false
         var hasStarted = false
         var result: Result<Response, any Error>?
@@ -75,6 +76,10 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
             $0.session = session
             $0.task = task
         }
+    }
+
+    var uploadedBodyByteCount: Int64 {
+        state.withLock { $0.task?.countOfBytesSent ?? $0.sentBytes }
     }
 
     func start() {
@@ -149,6 +154,7 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
             CheckedContinuation<Response, any Error>?, StreamingHTTPBody?, URLSession?
         )? in
             guard state.result == nil else { return nil }
+            state.sentBytes = state.task?.countOfBytesSent ?? state.sentBytes
             state.result = result
             let cleanup = (state.waiter, state.body, state.session)
             state.waiter = nil

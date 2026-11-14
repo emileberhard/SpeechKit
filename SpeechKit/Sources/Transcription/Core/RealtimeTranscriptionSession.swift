@@ -51,6 +51,7 @@ public actor ProgressiveRealtimeTranscriptionSession: RealtimeTranscriptionSessi
     private var upload: ProgressiveTranscriptionSession?
     private var continuation: AsyncThrowingStream<RealtimeTranscriptionEvent, Error>.Continuation?
     private var finishTask: Task<Void, Never>?
+    private var lastUploadedBodyByteCount: Int64?
     private var hasConnected = false
     private var isDisconnected = false
 
@@ -58,6 +59,13 @@ public actor ProgressiveRealtimeTranscriptionSession: RealtimeTranscriptionSessi
         self.provider = provider
         self.request = request
         self.sampleRate = provider.progressiveSampleRate
+    }
+
+    public var uploadedBodyByteCount: Int64? {
+        get async {
+            if let upload { return await upload.uploadedBodyByteCount }
+            return lastUploadedBodyByteCount
+        }
     }
 
     public nonisolated var finalizationTimeout: Duration { .seconds(8) }
@@ -107,6 +115,7 @@ public actor ProgressiveRealtimeTranscriptionSession: RealtimeTranscriptionSessi
         finishTask?.cancel()
         finishTask = nil
         let session = upload
+        if let session { lastUploadedBodyByteCount = await session.uploadedBodyByteCount }
         upload = nil
         continuation?.finish()
         continuation = nil

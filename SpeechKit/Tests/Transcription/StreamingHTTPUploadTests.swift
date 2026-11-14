@@ -113,6 +113,7 @@ struct StreamingHTTPUploadTests {
         await #expect(throws: ProgressiveTranscriptionError.stalled) { try await upload.response() }
         #expect(started.duration(to: .now) < .seconds(2))
         #expect(server.accepted)
+        #expect(upload.uploadedBodyByteCount == (tls ? 0 : 14))
         #expect((server.received.range(of: Data("suffix".utf8)) != nil) == !tls)
     }
 

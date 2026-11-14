@@ -170,6 +170,7 @@ struct RealtimeTranscriptionSessionTests {
 
     @Test func progressiveDisconnectEndsAPendingFinalizationWithoutAnError() async throws {
         let session = ProgressiveRealtimeTranscriptionSession(provider: UnansweredProgressiveProvider(), request: .init())
+        #expect(await session.uploadedBodyByteCount == nil)
         let events = try await session.connectTranscription()
         try await session.sendAudioChunk(Data([0, 0]))
         try await session.requestCommit()
@@ -181,6 +182,7 @@ struct RealtimeTranscriptionSessionTests {
             received.append(event)
         }
         #expect(received.isEmpty)
+        #expect(await session.uploadedBodyByteCount == 0)
         await #expect(throws: CancellationError.self) { try await session.sendAudioChunk(Data([0, 0])) }
     }
 
