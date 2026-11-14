@@ -15,7 +15,7 @@ public final class SpeechRelayTransport: Sendable, Equatable {
 
     public init(
         configure: @escaping @Sendable (URLSessionConfiguration) -> Void,
-        acceptsServerTrust: @escaping @Sendable (SecTrust) -> Bool,
+        acceptsServerTrust: (@Sendable (SecTrust) -> Bool)? = nil,
         uploadLog: (@Sendable (String) -> Void)? = nil
     ) {
         self.configure = configure
@@ -55,9 +55,9 @@ public final class SpeechRelayTransport: Sendable, Equatable {
     }
 
     private final class ServerTrust: NSObject, URLSessionTaskDelegate, Sendable {
-        private let accepts: @Sendable (SecTrust) -> Bool
+        private let accepts: (@Sendable (SecTrust) -> Bool)?
 
-        init(accepts: @escaping @Sendable (SecTrust) -> Bool) {
+        init(accepts: (@Sendable (SecTrust) -> Bool)?) {
             self.accepts = accepts
         }
 
@@ -77,7 +77,7 @@ public final class SpeechRelayTransport: Sendable, Equatable {
         }
 
         func answer(_ challenge: URLAuthenticationChallenge) -> (URLSession.AuthChallengeDisposition, URLCredential?) {
-            guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+            guard let accepts, challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
                   let trust = challenge.protectionSpace.serverTrust else { return (.performDefaultHandling, nil) }
             return accepts(trust) ? (.useCredential, URLCredential(trust: trust)) : (.cancelAuthenticationChallenge, nil)
         }

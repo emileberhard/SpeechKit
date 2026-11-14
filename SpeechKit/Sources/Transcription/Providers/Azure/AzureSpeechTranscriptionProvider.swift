@@ -53,7 +53,7 @@ public struct AzureSpeechTranscriptionProvider: ProgressiveTranscriptionProvider
         var urlRequest = try makeRequest(boundary: prepared.boundary)
         let body = multipart.build()
         urlRequest.httpBody = body
-        let observer = AzureSpeechUploadObserver(bodyBytes: body.count, transport: configuration.access.relay?.transport,
+        let observer = AzureSpeechUploadObserver(bodyBytes: body.count, transport: configuration.access.transport,
                                                  completed: uploadFinished)
         defer { observer.stop() }
         let data: Data
@@ -82,7 +82,7 @@ public struct AzureSpeechTranscriptionProvider: ProgressiveTranscriptionProvider
             bodyPrefix: framing.prefix,
             bodySuffix: framing.suffix,
             sessionConfiguration: session.configuration,
-            transport: configuration.access.relay?.transport,
+            transport: configuration.access.transport,
             failure: { failure(for: $0) },
             decode: { data, response in
                 try decode(data, response: response, warnings: prepared.warnings)

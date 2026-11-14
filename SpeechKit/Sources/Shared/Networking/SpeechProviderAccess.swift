@@ -79,8 +79,9 @@ extension SpeechRelay {
 public struct LLMRouter: Sendable, Equatable {
     public let origin: URL
     public let key: String
+    public let transport: SpeechRelayTransport?
 
-    public init(origin: URL, key: String) throws {
+    public init(origin: URL, key: String, transport: SpeechRelayTransport? = nil) throws {
         guard let components = URLComponents(url: origin, resolvingAgainstBaseURL: false),
               let scheme = components.scheme?.lowercased(),
               scheme == "https" || scheme == "http",
@@ -100,6 +101,7 @@ public struct LLMRouter: Sendable, Equatable {
 
         self.origin = origin
         self.key = key
+        self.transport = transport
     }
 }
 
@@ -124,7 +126,7 @@ extension LLMRouter {
         guard let url = components.url else {
             throw SpeechKitError.invalidRequest("Could not build the llm-router URL")
         }
-        return try SpeechRelay(baseURL: url, bearerToken: key)
+        return try SpeechRelay(baseURL: url, bearerToken: key, transport: transport)
     }
 
     private static func routePath(host: String, upstreamPath: String) -> String? {
@@ -145,6 +147,13 @@ public enum SpeechProviderAccess: Sendable, Equatable {
 }
 
 extension SpeechProviderAccess {
+    var transport: SpeechRelayTransport? {
+        switch self {
+        case .router(let router): router.transport
+        case .relay(let relay): relay.transport
+        }
+    }
+
     var relay: SpeechRelay? {
         guard case .relay(let relay) = self else { return nil }
         return relay

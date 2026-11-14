@@ -90,22 +90,31 @@ struct SpeechRelayTests {
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer rc1.installation")
     }
 
-    @Test func providersReachTheRelayThroughItsTransportAndShareItsSessions() async throws {
+    @Test(arguments: [false, true])
+    func providersUseTheirAccessTransportAndShareItsSessions(router: Bool) async throws {
         let capture = RelayRequestCapture()
         RelayMockURLProtocol.handlerStore.set { request in
             capture.append(request)
-            let body = request.url?.path.hasSuffix(":generateContent") == true
-                ? #"{"candidates":[{"content":{"parts":[{"text":"Hej Stockholm."}]}}]}"#
-                : #"{"text":"Hej Stockholm."}"#
+            let body: String
+            if request.url?.path.hasSuffix(":generateContent") == true {
+                body = #"{"candidates":[{"content":{"parts":[{"text":"Hej Stockholm."}]}}]}"#
+            } else if request.url?.path.hasSuffix(":transcribe") == true {
+                body = #"{"combinedPhrases":[{"text":"Hej Stockholm."}]}"#
+            } else {
+                body = #"{"text":"Hej Stockholm."}"#
+            }
             return Self.response(for: request, body: Data(body.utf8))
         }
         defer { RelayMockURLProtocol.handlerStore.set(nil) }
         let transport = SpeechRelayTransport(
-            configure: { $0.protocolClasses = [RelayMockURLProtocol.self] },
+            configure: { $0.protocolClasses = [RelayMockURLProtocol.self]; $0.waitsForConnectivity = false },
             acceptsServerTrust: { _ in false }
         )
         func access(_ provider: String) throws -> SpeechProviderAccess {
-            .relay(try SpeechRelay(
+            if router {
+                return .router(try LLMRouter(origin: #require(URL(string: "https://router.test")), key: "llmr_test", transport: transport))
+            }
+            return .relay(try SpeechRelay(
                 baseURL: URL(string: "https://gateway.test:8787/speech/\(provider)")!,
                 bearerToken: "rc1.installation",
                 transport: transport
@@ -117,8 +126,13 @@ struct SpeechRelayTests {
         #expect(try await openAI.transcribe(Self.transcriptionRequest(fileExtension: "m4a")).text == "Hej Stockholm.")
         #expect(try await gemini.transcribe(Self.transcriptionRequest(fileExtension: "wav")).text == "Hej Stockholm.")
 
-        #expect(capture.requests.map { $0.url?.host } == ["gateway.test", "gateway.test"])
+        let azureAccess = try access("azure")
+        let azure = AzureSpeechTranscriptionProvider(configuration: try .init(access: azureAccess))
+        #expect(try await azure.transcribe(Self.transcriptionRequest(fileExtension: "wav")).text == "Hej Stockholm.")
+        #expect(try azureAccess.azureSpeechRelay().transport === transport)
+        #expect(capture.requests.map { $0.url?.host } == Array(repeating: router ? "router.test" : "gateway.test", count: 3))
         let relay = try access("openai")
+        #expect(SpeechKitURLSessionFactory.batchSession(for: relay).configuration.waitsForConnectivity == false)
         #expect(SpeechKitURLSessionFactory.batchSession(for: relay) === SpeechKitURLSessionFactory.batchSession(for: relay))
         #expect(SpeechKitURLSessionFactory.realtimeSession(for: relay) !== SpeechKitURLSessionFactory.batchSession(for: relay))
     }

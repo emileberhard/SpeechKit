@@ -22,7 +22,7 @@ Speech synthesis currently supports Gemini 3.1 Flash TTS Preview through both
 the Generate Content and Interactions APIs, including incremental network
 delivery, adaptive buffering, managed audio sessions, and PCM playback.
 Speech input and output remain separate capabilities within one package, with
-shared transport code kept below the public APIs.
+shared transport code kept below the public APIs. Both router and relay access carry the same optional session transport; omitting its server-trust hook keeps system trust evaluation.
 
 ## Azure Speech and progressive upload
 
@@ -159,6 +159,7 @@ let transport = SpeechRelayTransport(
     acceptsServerTrust: { trust in pin.matches(trust) }
 )
 let relay = try SpeechRelay(baseURL: speechURL, bearerToken: installationToken, transport: transport)
+let router = try LLMRouter(origin: routerURL, key: routerKey, transport: transport)
 ```
 
 The relay contract:

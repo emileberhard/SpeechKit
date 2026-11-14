@@ -18,7 +18,7 @@ package enum SpeechKitURLSessionFactory {
     }
 
     private static func session(_ kind: SpeechRelayTransport.SessionKind, for access: SpeechProviderAccess) -> URLSession {
-        if let transport = access.relay?.transport {
+        if let transport = access.transport {
             return transport.session(kind) { configuration(for: kind) }
         }
         switch kind {
