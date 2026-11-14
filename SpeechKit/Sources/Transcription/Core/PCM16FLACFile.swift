@@ -3,7 +3,7 @@ import Foundation
 
 public enum PCM16FLACFile {
     public static func data(pcmData: Data, sampleRate: Int) throws -> Data {
-        var offset = 0
+        var offset = pcmData.startIndex
         return try PCM16AudioEncoder.data(byteCount: pcmData.count, sampleRate: sampleRate,
             fileExtension: "flac", settings: [AVFormatIDKey: kAudioFormatFLAC, AVEncoderBitDepthHintKey: 16]) { count in
             let chunk = pcmData.subdata(in: offset..<(offset + count))

@@ -4,10 +4,13 @@ import Testing
 @testable import SpeechKit
 
 struct PCM16FLACFileTests {
-    @Test func losslessExportPreservesEverySampleAcrossEncoderChunks() throws {
+    @Test(arguments: [false, true])
+    func losslessExportPreservesEverySampleAcrossEncoderChunks(sliced: Bool) throws {
         let samples = (0..<70_123).map { Int16(truncatingIfNeeded: $0 &* 173) }
         let pcm = samples.withUnsafeBytes { Data($0) }
-        let data = try PCM16FLACFile.data(pcmData: pcm, sampleRate: 16_000)
+        let input = sliced ? (Data([0, 0, 0, 0]) + pcm).dropFirst(4) : pcm
+        #expect(input.startIndex == (sliced ? 4 : 0))
+        let data = try PCM16FLACFile.data(pcmData: input, sampleRate: 16_000)
         let url = URL.temporaryDirectory.appending(path: "\(UUID()).flac")
         defer { try? FileManager.default.removeItem(at: url) }
         try data.write(to: url)
