@@ -51,6 +51,20 @@ public struct DictationRecording<Owner: Codable & Sendable>: Sendable, Identifia
         return try TranscriptionAudio(data: aac, fileName: "dictation.m4a", mimeType: "audio/m4a", fileExtension: "m4a")
     }
 
+    @concurrent public func flacAudio(maximumByteCount: Int) async throws -> TranscriptionAudio {
+        guard maximumByteCount > 0 else {
+            throw SpeechKitError.invalidRequest("Maximum transcription audio size must be > 0")
+        }
+        let byteCount = try savedPCMByteCount()
+        let input = try whileRecordingExists { try FileHandle(forReadingFrom: audioURL) }
+        defer { try? input.close() }
+        let data = try PCM16FLACFile.data(pcm16From: input, byteCount: byteCount, sampleRate: sampleRate)
+        guard data.count <= maximumByteCount else {
+            throw DictationRecordingError.audioTooLarge(byteCount: data.count, maximumByteCount: maximumByteCount)
+        }
+        return try TranscriptionAudio(data: data, fileName: "dictation.flac", mimeType: "audio/flac", fileExtension: "flac")
+    }
+
     private func savedPCMByteCount() throws -> Int {
         guard let status = try RecordingFileSystem.status(audioURL) else {
             throw DictationRecordingError.recordingMissing(id)
@@ -89,7 +103,7 @@ extension DictationRecordingError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .audioTooLarge(let byteCount, let maximumByteCount):
-            return "The recording is \(byteCount) bytes even as AAC, above the \(maximumByteCount)-byte limit"
+            return "The recording is \(byteCount) bytes after encoding, above the \(maximumByteCount)-byte limit"
         case .recordingMissing(let id):
             return "Dictation recording \(id.uuidString) no longer exists"
         case .alreadyFinished:
