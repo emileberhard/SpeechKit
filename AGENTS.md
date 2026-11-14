@@ -53,6 +53,11 @@ credentials, personal configuration, raw provider output or recordings.
   provider credential or key-file path belongs in the package.
 - Realtime finalization promises all committed audio's text. Keep ordered input,
   bounded buffers, explicit cancellation and cleanup; never silently truncate.
+  Progressive uploads own an 8 s no-progress watchdog; the realtime adapter
+  advertises an 8 s finalization allowance before unprocessed audio. Azure
+  saved-audio uploads use the same upload watchdog and a 30 s response deadline.
+  Keep those limits out of shared URLSession configuration. Speech upload metrics
+  contain connection timings and byte counts only, never headers or payloads.
 - Recording writers keep a durable original before provider work. Format version
   1 headers and 8 MiB archive chunks are persistent contracts. Never delete audio
   because its metadata is unreadable or an upload merely started.

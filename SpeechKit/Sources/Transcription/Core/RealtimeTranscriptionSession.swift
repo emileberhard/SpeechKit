@@ -60,7 +60,7 @@ public actor ProgressiveRealtimeTranscriptionSession: RealtimeTranscriptionSessi
         self.sampleRate = provider.progressiveSampleRate
     }
 
-    public nonisolated var finalizationTimeout: Duration { .seconds(60) }
+    public nonisolated var finalizationTimeout: Duration { .seconds(8) }
 
     public func connectTranscription() async throws -> AsyncThrowingStream<RealtimeTranscriptionEvent, Error> {
         guard !isDisconnected else { throw CancellationError() }

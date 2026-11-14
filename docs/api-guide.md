@@ -145,7 +145,10 @@ let configuration = try OpenAIRealtimeSessionConfiguration(access: .relay(relay)
 A relay the system's default networking cannot reach, such as one behind a
 proxy or with a pinned self-signed certificate, takes a `SpeechRelayTransport`.
 SpeechKit applies its `configure` to every session configuration it builds for
-that relay, including progressive uploads, so `configure` must only assign
+that relay, including progressive uploads. The optional `uploadLog` callback
+receives content-free upload connection metrics (connect, TLS, first-byte
+timing and bytes sent); missing end times are reported as incomplete.
+`configure` must only assign
 settings and stay safe to apply twice. `acceptsServerTrust` decides each
 server-trust challenge. The transport owns those sessions, one per kind
 of traffic, and invalidates them when the last relay holding it goes away.
@@ -513,10 +516,16 @@ do {
   others are `.commitFailed`, `.streamEnded`, `.finalizationTimedOut` and
   `.audioBufferOverflow`. Every one means: use the saved recording.
 - **Waiting.** The wait for the final transcript starts at `finish()`. It is the
-  session's `finalizationTimeout` (5 seconds for WebSocket providers, 60 seconds
+  session's `finalizationTimeout` (5 seconds for WebSocket providers, 8 seconds
   for progressive upload) plus the audio the provider has not yet had real time
   to process: audio still queued, and audio sent faster than real time after a
-  slow connect.
+  slow connect. Progressive uploads also fail with
+  `ProgressiveTranscriptionError.stalled` after 8 seconds without sent body
+  bytes, response headers or response data while bytes remain unsent or the
+  finished body awaits a response. Idle capture with no queued bytes does not
+  count as a stall. Azure saved-recording uploads use the same 8-second upload
+  stall limit and a 30-second response deadline after the body is sent.
+  Shared URLSession configuration values are unchanged.
 - **Cancelling.** `cancel()` tears the session down. Cancelling the task that
   awaits `finish()` throws `CancellationError`, never partial text.
 - **Ownership.** The dictation connects and disconnects its session; do not

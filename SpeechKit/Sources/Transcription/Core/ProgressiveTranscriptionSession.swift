@@ -112,6 +112,7 @@ public actor ProgressiveTranscriptionSession {
 }
 
 public enum ProgressiveTranscriptionError: Error, Sendable, Equatable {
+    case stalled
     case alreadyFinished
     case bufferOverflow
     case bodyStreamFailed
@@ -123,6 +124,7 @@ public enum ProgressiveTranscriptionError: Error, Sendable, Equatable {
 extension ProgressiveTranscriptionError: LocalizedError {
     public var errorDescription: String? {
         switch self {
+        case .stalled: "The transcription upload stopped making progress"
         case .alreadyFinished: "This transcription upload has already finished"
         case .bufferOverflow: "The network could not keep up with the audio upload"
         case .bodyStreamFailed: "The audio upload stream failed"

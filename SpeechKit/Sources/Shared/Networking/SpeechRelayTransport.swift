@@ -10,13 +10,16 @@ public final class SpeechRelayTransport: Sendable, Equatable {
 
     private let configure: @Sendable (URLSessionConfiguration) -> Void
     private let trust: ServerTrust
+    private let uploadLog: (@Sendable (String) -> Void)?
     private let sessions = Mutex<[SessionKind: URLSession]>([:])
 
     public init(
         configure: @escaping @Sendable (URLSessionConfiguration) -> Void,
-        acceptsServerTrust: @escaping @Sendable (SecTrust) -> Bool
+        acceptsServerTrust: @escaping @Sendable (SecTrust) -> Bool,
+        uploadLog: (@Sendable (String) -> Void)? = nil
     ) {
         self.configure = configure
+        self.uploadLog = uploadLog
         trust = ServerTrust(accepts: acceptsServerTrust)
     }
 
@@ -44,6 +47,8 @@ public final class SpeechRelayTransport: Sendable, Equatable {
         configure(prepared)
         return prepared
     }
+
+    func logUpload(_ message: String) { uploadLog?(message) }
 
     func answer(_ challenge: URLAuthenticationChallenge) -> (URLSession.AuthChallengeDisposition, URLCredential?) {
         trust.answer(challenge)

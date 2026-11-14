@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 public struct AzureSpeechTranscriptionProvider: ProgressiveTranscriptionProvider {
     public let id = "azure-speech"
@@ -18,7 +19,7 @@ public struct AzureSpeechTranscriptionProvider: ProgressiveTranscriptionProvider
             customVocabulary: request.customVocabulary,
             instructions: request.instructions
         ))
-        let (data, response) = try await upload(request.audio, prepared: prepared, delegate: nil)
+        let (data, response) = try await upload(request.audio, prepared: prepared, uploadFinished: nil)
         return try decode(data, response: response, warnings: prepared.warnings)
     }
 
@@ -29,13 +30,13 @@ public struct AzureSpeechTranscriptionProvider: ProgressiveTranscriptionProvider
         ))
         let prepared = try prepare(definition)
         let (data, response) = try await upload(request.audio, prepared: prepared,
-            delegate: uploadFinished.map { AzureSpeechUploadObserver(completed: $0) })
+            uploadFinished: uploadFinished)
         guard (200..<300).contains(response.statusCode) else { throw failure(for: response) }
         return try JSONDecoder().decode(AzureSpeechAPI.SpeakerResponse.self, from: data).validatedPhrases()
     }
 
     private func upload(_ audio: TranscriptionAudio, prepared: (multipart: MultipartFormDataBuilder, boundary: String, warnings: [String]),
-                        delegate: (any URLSessionTaskDelegate)?)
+                        uploadFinished: (@Sendable (Duration) -> Void)?)
         async throws -> (Data, HTTPURLResponse) {
         let fileExtension = audio.fileExtension.lowercased()
         guard ["wav", "mp3", "flac"].contains(fileExtension),
@@ -50,8 +51,18 @@ public struct AzureSpeechTranscriptionProvider: ProgressiveTranscriptionProvider
         )
         multipart.finalize()
         var urlRequest = try makeRequest(boundary: prepared.boundary)
-        urlRequest.httpBody = multipart.build()
-        let (data, response) = try await session.data(for: urlRequest, delegate: delegate)
+        let body = multipart.build()
+        urlRequest.httpBody = body
+        let observer = AzureSpeechUploadObserver(bodyBytes: body.count, transport: configuration.access.relay?.transport,
+                                                 completed: uploadFinished)
+        defer { observer.stop() }
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: urlRequest, delegate: observer)
+        } catch {
+            throw observer.failure ?? error
+        }
         guard let response = response as? HTTPURLResponse else { throw SpeechKitError.invalidResponse }
         return (data, response)
     }
@@ -131,16 +142,57 @@ public struct AzureSpeechTranscriptionProvider: ProgressiveTranscriptionProvider
     }
 }
 
-private final class AzureSpeechUploadObserver: NSObject, URLSessionTaskDelegate, Sendable {
+final class AzureSpeechUploadObserver: NSObject, URLSessionTaskDelegate, Sendable {
     private let started = ContinuousClock.now
-    private let completed: @Sendable (Duration) -> Void
+    private let completed: (@Sendable (Duration) -> Void)?
+    private let transport: SpeechRelayTransport?
+    private let bodyBytes: Int
+    private let stallTimeout: Duration
+    private let responseTimeout: Duration
+    private let progress = Mutex<SpeechUploadWatchdog?>(nil)
 
-    init(completed: @escaping @Sendable (Duration) -> Void) { self.completed = completed }
+    init(bodyBytes: Int, transport: SpeechRelayTransport?, completed: (@Sendable (Duration) -> Void)?,
+         stallTimeout: Duration = .seconds(8), responseTimeout: Duration = .seconds(30)) {
+        self.bodyBytes = bodyBytes
+        self.transport = transport
+        self.completed = completed
+        self.stallTimeout = stallTimeout
+        self.responseTimeout = responseTimeout
+    }
+
+    var failure: (any Error)? { progress.withLock { $0 }?.failure }
+
+    func stop() {
+        let watchdog = progress.withLock { progress in
+            let watchdog = progress
+            progress = nil
+            return watchdog
+        }
+        watchdog?.stop()
+    }
+
+    func urlSession(_ session: URLSession, didCreateTask task: URLSessionTask) {
+        let watchdog = SpeechUploadWatchdog(stallTimeout: stallTimeout, responseTimeout: responseTimeout) { _ in task.cancel() }
+        watchdog.offer(bodyBytes)
+        watchdog.finishBody()
+        progress.withLock { $0 = watchdog }
+        watchdog.start()
+    }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
                     totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
-        if totalBytesExpectedToSend > 0, totalBytesSent >= totalBytesExpectedToSend {
-            completed(started.duration(to: .now))
+        progress.withLock { $0 }?.sent(totalBytesSent)
+        if totalBytesSent >= bodyBytes, totalBytesSent - bytesSent < bodyBytes {
+            completed?(started.duration(to: .now))
         }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge)
+        async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        transport?.answer(challenge) ?? (.performDefaultHandling, nil)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+        SpeechUploadMetrics.log(task: task, metrics: metrics, transport: transport)
     }
 }

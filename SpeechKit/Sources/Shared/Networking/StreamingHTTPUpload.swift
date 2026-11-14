@@ -11,6 +11,7 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
     private struct State {
         nonisolated(unsafe) var input: InputStream?
         var body: StreamingHTTPBody?
+        var progress: SpeechUploadWatchdog?
         var task: URLSessionUploadTask?
         var session: URLSession?
         var data = Data()
@@ -34,13 +35,14 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
         transport: SpeechRelayTransport?,
         failure: @escaping @Sendable (HTTPURLResponse) -> any Error,
         bufferCapacity: Int,
-        maximumResponseBytes: Int = 4 * 1_024 * 1_024
+        maximumResponseBytes: Int = 4 * 1_024 * 1_024,
+        stallTimeout: Duration = .seconds(8)
     ) throws {
         guard request.httpBody == nil, request.httpBodyStream == nil,
               request.value(forHTTPHeaderField: "Content-Length") == nil else {
             throw SpeechKitError.invalidRequest("A progressive upload supplies its own unknown-length body")
         }
-        guard bufferCapacity > 0, maximumResponseBytes > 0 else {
+        guard bufferCapacity > 0, maximumResponseBytes > 0, stallTimeout > .zero else {
             throw SpeechKitError.invalidConfiguration("Upload buffer limits must be positive")
         }
         self.suffix = suffix
@@ -59,6 +61,11 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
             onFailure: { [weak self] error in self?.complete(.failure(error)) },
             onClose: { [weak self] in self?.state.withLock { $0.bodyClosed = true } }
         )
+        let watchdog = SpeechUploadWatchdog(stallTimeout: stallTimeout, responseTimeout: nil) { [weak self] error in
+            self?.complete(.failure(error))
+        }
+        state.withLock { $0.progress = watchdog }
+        watchdog.offer(prefix.count)
         try body.append(prefix)
         let session = URLSession(configuration: transport?.prepared(configuration) ?? configuration, delegate: self, delegateQueue: nil)
         let task = session.uploadTask(withStreamedRequest: request)
@@ -76,12 +83,16 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
             state.hasStarted = true
             return state.task
         }
-        task?.resume()
+        if let task {
+            state.withLock { $0.progress }?.start()
+            task.resume()
+        }
     }
 
     func append(_ data: Data) throws {
         let body = try activeBody()
         do {
+            state.withLock { $0.progress }?.offer(data.count)
             try body.append(data)
         } catch {
             complete(.failure(error))
@@ -92,7 +103,10 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
     func finish() throws {
         let body = try activeBody()
         do {
+            let watchdog = state.withLock { $0.progress }
+            watchdog?.offer(suffix.count)
             try body.finish(suffix: suffix)
+            watchdog?.finishBody()
         } catch {
             complete(.failure(error))
             throw error
@@ -146,6 +160,7 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
             return cleanup
         }
         guard let cleanup else { return }
+        state.withLock { $0.progress }?.stop()
         cleanup.1?.cancel()
         // Also starts an as-yet unused writer so its output closes on its owner.
         cleanup.1?.start()
@@ -188,7 +203,23 @@ final class StreamingHTTPUpload: NSObject, URLSessionDataDelegate, Sendable {
         completionHandler(input)
     }
 
+    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
+                    totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
+        state.withLock { $0.progress }?.sent(totalBytesSent)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void) {
+        state.withLock { $0.progress }?.received()
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+        SpeechUploadMetrics.log(task: task, metrics: metrics, transport: transport)
+    }
+
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        state.withLock { $0.progress }?.received()
         let tooLarge = state.withLock { state in
             guard state.result == nil else { return false }
             guard data.count <= maximumResponseBytes - state.data.count else { return true }
