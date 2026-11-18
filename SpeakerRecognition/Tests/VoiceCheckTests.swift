@@ -86,6 +86,136 @@ struct VoiceCheckTests {
         await check.cancel()
     }
 
+    private struct PendingCheck {
+        let check: VoiceCheck
+        let store: VoiceProfileStore
+        let settle: Signal
+        let registered: Signal
+        let fireTimer: Signal
+        let fetched: OSAllocatedUnfairLock<Int>
+        let sleeps: OSAllocatedUnfairLock<[ContinuousClock.Instant]>
+        let now: OSAllocatedUnfairLock<ContinuousClock.Instant>
+
+        func resolving(waitingUpTo budget: Duration, waits: Bool = true) async -> Task<VoiceCheckResult, any Error>? {
+            let delivery = Task { [check, registered] in
+                defer { Task { await registered.open() } }
+                return try await check.resolve(everyone: "Everyone.", linesAreSpeakerTurns: true, waitingUpTo: budget)
+            }
+            await registered.wait()
+            guard sleeps.withLock({ !$0.isEmpty }) == waits else {
+                Issue.record(waits ? "resolve delivered before waiting for the pending check" : "resolve waited on a spent budget")
+                await release()
+                return nil
+            }
+            return delivery
+        }
+
+        func release() async {
+            await settle.open()
+            await fireTimer.open()
+        }
+    }
+
+    private func pendingCheck(directory: URL) async throws -> PendingCheck {
+        let profile = try await trustedProfile()
+        let source = VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: profile.trustedMean)
+        source.append(try mixedAudio())
+        source.finish()
+        let recording = try await source.recording
+        #expect(recording.requestsLabels)
+        let settle = Signal(), registered = Signal(), fireTimer = Signal()
+        let now = OSAllocatedUnfairLock(initialState: ContinuousClock.now)
+        let sleeps = OSAllocatedUnfairLock<[ContinuousClock.Instant]>(initialState: [])
+        let watch = VoiceWatch(listening: Task {
+            await settle.wait()
+            return recording
+        })
+        let store = VoiceProfileStore(accountDirectory: directory)
+        let clock = VoiceCheckClock(now: { now.withLock { $0 } }, sleep: { deadline in
+            sleeps.withLock { $0.append(deadline) }
+            await registered.open()
+            await fireTimer.wait()
+        })
+        let check = VoiceCheck(profile: profile, store: store, startedAt: .now,
+                               onFailure: { _, _ in Issue.record("Unexpected failure") }, watch: watch, clock: clock)
+        let fetched = OSAllocatedUnfairLock(initialState: 0)
+        await check.finish { _ in
+            fetched.withLock { $0 += 1 }
+            return []
+        }
+        return PendingCheck(check: check, store: store, settle: settle, registered: registered, fireTimer: fireTimer,
+                            fetched: fetched, sleeps: sleeps, now: now)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aWatcherSettlingWithinTheBudgetRequestsLabelsUnderTheSameDeadline() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pending = try await pendingCheck(directory: directory)
+        let start = pending.now.withLock { $0 }
+        guard let delivery = await pending.resolving(waitingUpTo: .seconds(3)) else { return }
+        await #expect(throws: CancellationError.self) {
+            try await pending.check.resolve(everyone: "Second.", linesAreSpeakerTurns: true, waitingUpTo: .seconds(3))
+        }
+        await pending.settle.open()
+        let result = try await delivery.value
+        #expect(result.text == "Everyone." && result.outcome.path == .keptEveryone && result.labelRequest == .watcher)
+        #expect(pending.fetched.withLock { $0 } == 1 && pending.sleeps.withLock { $0 } == [start.advanced(by: .seconds(3))])
+        await pending.release()
+        await pending.check.cancel()
+    }
+
+    enum DeadlineOrder: CaseIterable { case timerBeforeWatcher, watcherBeforeTimer }
+
+    @Test(.timeLimit(.minutes(1)), arguments: DeadlineOrder.allCases)
+    func aWatcherStillCheckingAtTheDeadlineKeepsEveryoneWithoutLabels(order: DeadlineOrder) async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pending = try await pendingCheck(directory: directory)
+        guard let delivery = await pending.resolving(waitingUpTo: .seconds(3)) else { return }
+        pending.now.withLock { $0 = $0.advanced(by: .seconds(3)) }
+        switch order {
+        case .timerBeforeWatcher: await pending.fireTimer.open()
+        case .watcherBeforeTimer: await pending.settle.open()
+        }
+        let result = try await delivery.value
+        await pending.release()
+        await pending.check.checking?.value
+        #expect(result.text == "Everyone." && result.outcome.path == .undecided && result.labelRequest == nil)
+        #expect(pending.fetched.withLock { $0 } == 0)
+        await pending.check.cancel()
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: DeadlineOrder.allCases)
+    func retiringTheStoreWhileWaitingCancelsTheResolution(order: DeadlineOrder) async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pending = try await pendingCheck(directory: directory)
+        guard let delivery = await pending.resolving(waitingUpTo: .seconds(3)) else { return }
+        pending.store.retire()
+        switch order {
+        case .timerBeforeWatcher: await pending.fireTimer.open()
+        case .watcherBeforeTimer: await pending.settle.open()
+        }
+        await #expect(throws: CancellationError.self) { try await delivery.value }
+        await pending.release()
+        #expect(pending.fetched.withLock { $0 } == 0)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aSpentBudgetDeliversAPendingCheckWithoutWaiting() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pending = try await pendingCheck(directory: directory)
+        guard let delivery = await pending.resolving(waitingUpTo: .zero, waits: false) else { return }
+        let result = try await delivery.value
+        await pending.release()
+        await pending.check.checking?.value
+        #expect(result.text == "Everyone." && result.outcome.path == .undecided)
+        #expect(pending.fetched.withLock { $0 } == 0 && pending.sleeps.withLock { $0 }.isEmpty)
+        await pending.check.cancel()
+    }
+
     @Test(.timeLimit(.minutes(1)), arguments: [4.1, 5.0], [1, 2])
     func labelledMixedSpeechNeverTeachesTheProfile(ownSeconds: Double, labelCount: Int) async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -466,8 +596,10 @@ struct VoiceCheckTests {
         await releaseFetch.open()
     }
 
-    @Test(.timeLimit(.minutes(1)))
-    func aCallerCancelledAtTheDeliveryBoundaryReceivesCancellation() async throws {
+    enum BoundaryRevocation: CaseIterable { case callerCancelled, storeRetired }
+
+    @Test(.timeLimit(.minutes(1)), arguments: BoundaryRevocation.allCases)
+    func aRevocationAtTheDeliveryBoundaryNeverCommitsAResult(revocation: BoundaryRevocation) async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let requested = Signal(), timerStarted = Signal(), fireTimer = Signal(), releaseFetch = Signal()
@@ -476,7 +608,12 @@ struct VoiceCheckTests {
         let store = VoiceProfileStore(accountDirectory: directory)
         let profile = try await trustedProfile()
         let check = VoiceCheck(profile: profile, store: store, startedAt: .now,
-                               onFailure: { _, _ in caller.withLock { $0 }?.cancel() },
+                               onFailure: { _, _ in
+            switch revocation {
+            case .callerCancelled: caller.withLock { $0 }?.cancel()
+            case .storeRetired: store.retire()
+            }
+        },
                                watch: VoiceWatch(modelURL: try SpeakerFixtures.modelURL(), profile: profile.trustedMean),
                                clock: VoiceCheckClock(now: { now.withLock { $0 } }, sleep: { _ in
             await timerStarted.open()
@@ -495,6 +632,9 @@ struct VoiceCheckTests {
         now.withLock { $0 = $0.advanced(by: .seconds(2)) }
         await fireTimer.open()
         await #expect(throws: CancellationError.self) { try await resultTask.value }
+        await #expect(throws: CancellationError.self) {
+            try await check.resolve(everyone: "Again.", linesAreSpeakerTurns: true, waitingUpTo: .seconds(2))
+        }
         await releaseFetch.open()
     }
 

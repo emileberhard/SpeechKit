@@ -17,9 +17,12 @@ another speaker. The closure runs at most once. It receives the admitted 16 kHz 
 PCM16, the same samples the filter embeds. A transport that uploads audio uses
 this argument without keeping a second recognition buffer; a transport that
 already holds the audio ignores it. Incomplete, over-limit recordings never
-invoke the closure. An unfinished watcher never delays
-the plain transcript. `resolve(everyone:linesAreSpeakerTurns:waitingUpTo:)` starts the caller's added
-wait budget when everyone's text arrives, filters labels if available, and
+invoke the closure. `resolve(everyone:linesAreSpeakerTurns:waitingUpTo:)` starts the
+caller's added wait budget when everyone's text arrives. That one deadline bounds
+everything `resolve` waits for: a watcher still checking, as it can be when saved
+audio is admitted faster than real time, and any labelled reply. A watcher still
+checking at the deadline keeps everyone's text as undecided without requesting
+labels. `resolve` filters labels if available, and
 returns a typed result containing delivered text, everyone's text, outcome and
 labelled-reply elapsed time. Every attempted label check reports elapsed time,
 including failures and timeouts. Delivery races an independent timer; it does
@@ -66,8 +69,7 @@ when a piece or window reaches 0.35 against the profile, and either the original
 piece detector fires or at least two windows score below 0.20. The contrast
 keeps a coherent mismatch from causing a request that cannot find an anchor. At stop, at most
 one piece is still open, so the answer normally arrives while Azure is still
-transcribing. An answer that isn't ready when the first result arrives counts
-as not heard, so the watcher can never delay delivery.
+transcribing.
 
 `VoiceWatch` runs whenever Only Mine is selected in a verified account, because
 learning needs its answer too, but asks for voices only while the profile is

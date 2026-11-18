@@ -105,6 +105,11 @@ nonisolated final class VoiceWatch: Sendable {
         listening = Task { try await Self.listen(to: stream, modelURL: modelURL, profile: profile) }
     }
 
+    init(listening: Task<VoiceRecording, any Error>) {
+        input = AsyncStream<Input>.makeStream().continuation
+        self.listening = listening
+    }
+
     deinit { cancel() }
 
     func append(_ pcm16: Data) {

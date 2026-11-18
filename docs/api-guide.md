@@ -875,7 +875,8 @@ Incomplete, over-limit recordings never invoke the closure. The check holds the
 closure until `resolve`, `cancel()` or its own release, so the closure must not
 strongly capture the check's owner.
 `resolve(everyone:linesAreSpeakerTurns:waitingUpTo:)` takes the additional delivery budget after the
-ordinary transcript arrives. Pass `true` for `linesAreSpeakerTurns` only when the
+ordinary transcript arrives. That one deadline bounds both a watcher still checking,
+such as for a saved recording, and any labelled reply. Pass `true` for `linesAreSpeakerTurns` only when the
 transcript's model breaks lines at speaker turns, as MAI-Transcribe-2's clean
 style does; a second line with words then requests labels and withholds
 learning. It returns `VoiceCheckResult` with `text`, `everyone`, `outcome`,

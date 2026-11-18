@@ -16,15 +16,20 @@ public nonisolated struct VoiceCheckResult: Sendable {
 
 nonisolated struct VoiceCheckClock: Sendable {
     let now: @Sendable () -> ContinuousClock.Instant
-    let sleep: @Sendable (Duration) async throws -> Void
+    let sleep: @Sendable (ContinuousClock.Instant) async throws -> Void
 
-    static let continuous = Self(now: { .now }, sleep: { try await Task.sleep(for: $0) })
+    static let continuous = Self(now: { .now }, sleep: { try await Task.sleep(until: $0, clock: .continuous) })
 }
 
 public actor VoiceCheck {
     public nonisolated static let maximumSamples = VoiceWatch.maximumSamples
 
     private typealias Fetch = @Sendable (_ pcm16: Data) async throws -> [SpeakerPhrase]
+
+    private struct Delivery: Sendable {
+        let result: VoiceCheckResult
+        let learns: Bool
+    }
 
     private enum State {
         case capturing
@@ -33,7 +38,9 @@ public actor VoiceCheck {
         case decided(VoiceFilterOutcome)
         case failed(any Error)
         case requested
+        case waitingForCheck(everyone: String, TranscriptVoices)
         case resolving(everyone: String, TranscriptVoices)
+        case committing
         case delivered(VoiceCheckResult)
         case cancelled
     }
@@ -50,7 +57,7 @@ public actor VoiceCheck {
     private var filtering: Task<Void, Never>?
     private var timer: Task<Void, Never>?
     private var learning: Task<Void, Never>?
-    private var continuation: CheckedContinuation<VoiceCheckResult, any Error>?
+    private var continuation: CheckedContinuation<Delivery, any Error>?
     private var requestedAt: ContinuousClock.Instant?
     private var replyTime: Duration?
     private var deliveryDeadline: ContinuousClock.Instant?
@@ -92,14 +99,17 @@ public actor VoiceCheck {
         }
         state = .checking
         checking = Task { [weak self, watch] in
+            let watched: Result<VoiceRecording, any Error>
             do {
                 let recording = try await watch.recording
                 try Task.checkCancellation()
-                await self?.checked(recording, fetch: fetch)
+                watched = .success(recording)
             } catch is CancellationError {
+                return
             } catch {
-                await self?.checkFailed(error)
+                watched = .failure(error)
             }
+            await self?.checked(watched, fetch: fetch)
         }
     }
 
@@ -109,47 +119,34 @@ public actor VoiceCheck {
             cancel()
             throw CancellationError()
         }
+        if case .delivered(let delivered) = state { return delivered }
+        let deadline = clock.now().advanced(by: budget)
         let voices = TranscriptVoices(everyone, linesAreSpeakerTurns: linesAreSpeakerTurns)
-        if voices.marksAnotherSpeaker, case .unflagged(let recording, let fetch) = state {
-            request(recording, fetch: fetch, by: .transcript)
-        }
-        let result: VoiceCheckResult
-        switch state {
-        case .cancelled, .resolving: throw CancellationError()
-        case .delivered(let delivered): result = delivered
-        case .capturing:
-            watch.finish()
-            result = deliver(everyone: everyone, text: everyone, outcome: .undecided, learning: voices.teaches)
-        case .checking:
+        if budget <= .zero, case .checking = state {
             checking?.cancel()
-            result = deliver(everyone: everyone, text: everyone, outcome: .undecided, learning: voices.teaches)
-        case .unflagged:
-            result = deliver(everyone: everyone, text: everyone, outcome: .notHeard, learning: voices.teaches)
-        case .decided(let outcome):
-            result = deliver(everyone: everyone, text: everyone, outcome: outcome, learning: voices.teaches)
-        case .failed(let error):
-            report(error)
-            result = deliver(everyone: everyone, text: everyone, outcome: .failed, learning: false)
-        case .requested:
-            deliveryDeadline = clock.now().advanced(by: budget)
-            result = try await withTaskCancellationHandler {
+            state = .decided(.undecided)
+        }
+        let delivery: Delivery
+        if let immediate = immediateDelivery(everyone: everyone, voices: voices) {
+            delivery = immediate
+        } else {
+            switch state {
+            case .checking, .requested: break
+            default: throw CancellationError()
+            }
+            deliveryDeadline = deadline
+            delivery = try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { continuation in
                     self.continuation = continuation
-                    state = .resolving(everyone: everyone, voices)
-                    let fetch = fetching!
-                    filtering = Task { [weak self] in
-                        do {
-                            let phrases = try await fetch.value
-                            try Task.checkCancellation()
-                            await self?.receivedPhrases(phrases)
-                        } catch {
-                            await self?.filtered(.failure(error))
-                        }
+                    if case .requested = state {
+                        awaitLabels(everyone: everyone, voices: voices)
+                    } else {
+                        state = .waitingForCheck(everyone: everyone, voices)
                     }
-                    timer = Task { [weak self, clock, budget] in
+                    timer = Task { [weak self, clock] in
                         do {
-                            try await clock.sleep(budget)
-                            await self?.filtered(.failure(VoiceFilterError.deadlineExceeded))
+                            try await clock.sleep(deadline)
+                            await self?.deadlinePassed()
                         } catch {}
                     }
                 }
@@ -157,8 +154,12 @@ public actor VoiceCheck {
                 Task { await self.cancel() }
             }
         }
-        try Task.checkCancellation()
-        return result
+        guard !Task.isCancelled, store.isCurrent(startedAt: startedAt) else {
+            cancel()
+            throw CancellationError()
+        }
+        if case .cancelled = state { throw CancellationError() }
+        return commit(delivery)
     }
 
     public func cancel() {
@@ -175,15 +176,93 @@ public actor VoiceCheck {
         continuation = nil
     }
 
-    private func checked(_ recording: VoiceRecording, fetch: @escaping Fetch) {
-        guard case .checking = state, store.isCurrent(startedAt: startedAt) else { return }
-        if !recording.isComplete {
-            state = .decided(.tooLong)
-        } else if recording.requestsLabels {
-            request(recording, fetch: fetch, by: .watcher)
+    private func immediateDelivery(everyone: String, voices: TranscriptVoices) -> Delivery? {
+        if voices.marksAnotherSpeaker, case .unflagged(let recording, let fetch) = state {
+            request(recording, fetch: fetch, by: .transcript)
+        }
+        switch state {
+        case .capturing:
+            watch.finish()
+            return delivery(everyone: everyone, text: everyone, outcome: .undecided, learning: voices.teaches)
+        case .unflagged:
+            return delivery(everyone: everyone, text: everyone, outcome: .notHeard, learning: voices.teaches)
+        case .decided(let outcome):
+            return delivery(everyone: everyone, text: everyone, outcome: outcome, learning: voices.teaches)
+        case .failed(let error):
+            report(error)
+            return delivery(everyone: everyone, text: everyone, outcome: .failed, learning: false)
+        case .checking, .requested, .waitingForCheck, .resolving, .committing, .delivered, .cancelled:
+            return nil
+        }
+    }
+
+    private func awaitLabels(everyone: String, voices: TranscriptVoices) {
+        state = .resolving(everyone: everyone, voices)
+        let fetch = fetching!
+        filtering = Task { [weak self] in
+            do {
+                let phrases = try await fetch.value
+                try Task.checkCancellation()
+                await self?.receivedPhrases(phrases)
+            } catch {
+                await self?.filtered(.failure(error))
+            }
+        }
+    }
+
+    private func continueWaiting(everyone: String, voices: TranscriptVoices) {
+        if let delivery = immediateDelivery(everyone: everyone, voices: voices) {
+            complete(delivery)
         } else {
+            awaitLabels(everyone: everyone, voices: voices)
+        }
+    }
+
+    private func deadlinePassed() {
+        switch state {
+        case .waitingForCheck(let everyone, let voices):
+            guard store.isCurrent(startedAt: startedAt) else { return cancel() }
+            checking?.cancel()
+            complete(delivery(everyone: everyone, text: everyone, outcome: .undecided, learning: voices.teaches))
+        case .resolving:
+            filtered(.failure(VoiceFilterError.deadlineExceeded))
+        default:
+            break
+        }
+    }
+
+    private func complete(_ delivery: Delivery) {
+        timer?.cancel()
+        state = .committing
+        continuation?.resume(returning: delivery)
+        continuation = nil
+    }
+
+    private func checked(_ watched: Result<VoiceRecording, any Error>, fetch: @escaping Fetch) {
+        let waiting: (everyone: String, voices: TranscriptVoices)?
+        switch state {
+        case .checking: waiting = nil
+        case .waitingForCheck(let everyone, let voices): waiting = (everyone, voices)
+        default: return
+        }
+        guard store.isCurrent(startedAt: startedAt) else {
+            if waiting != nil { cancel() }
+            return
+        }
+        if waiting != nil, let deliveryDeadline, clock.now() >= deliveryDeadline {
+            return deadlinePassed()
+        }
+        switch watched {
+        case .failure(let error):
+            state = .failed(error)
+        case .success(let recording) where !recording.isComplete:
+            state = .decided(.tooLong)
+        case .success(let recording) where recording.requestsLabels:
+            request(recording, fetch: fetch, by: .watcher)
+        case .success(let recording):
             state = .unflagged(recording, fetch: fetch)
         }
+        if let waiting { continueWaiting(everyone: waiting.everyone, voices: waiting.voices) }
     }
 
     private func request(_ recording: VoiceRecording, fetch: @escaping Fetch, by labelRequest: VoiceLabelRequest) {
@@ -230,46 +309,44 @@ public actor VoiceCheck {
         }
     }
 
-    private func checkFailed(_ error: any Error) {
-        guard case .checking = state else { return }
-        state = .failed(error)
-    }
-
     private func filtered(_ filtered: Result<(text: String, outcome: VoiceFilterOutcome), any Error>) {
         guard case .resolving(let everyone, let voices) = state else { return }
         guard store.isCurrent(startedAt: startedAt) else { return cancel() }
-        let result: VoiceCheckResult
+        let delivery: Delivery
         if let deadline = deliveryDeadline, clock.now() >= deadline {
             report(VoiceFilterError.deadlineExceeded)
-            result = deliver(everyone: everyone, text: everyone, outcome: .failed, learning: false)
+            delivery = self.delivery(everyone: everyone, text: everyone, outcome: .failed, learning: false)
         } else {
             switch filtered {
             case .success(let filtered):
-                result = deliver(everyone: everyone, text: filtered.text, outcome: filtered.outcome,
-                                 learning: voices.teaches && filtered.outcome.labelCount <= 1 && filtered.outcome.droppedCount == 0)
+                delivery = self.delivery(everyone: everyone, text: filtered.text, outcome: filtered.outcome,
+                                         learning: voices.teaches && filtered.outcome.labelCount <= 1 && filtered.outcome.droppedCount == 0)
             case .failure(let error):
                 report(error)
-                result = deliver(everyone: everyone, text: everyone, outcome: .failed, learning: false)
+                delivery = self.delivery(everyone: everyone, text: everyone, outcome: .failed, learning: false)
             }
         }
-        timer?.cancel()
         fetching?.cancel()
         filtering?.cancel()
-        continuation?.resume(returning: result)
-        continuation = nil
+        complete(delivery)
     }
 
     private func report(_ error: any Error) {
         onFailure(.filter, error)
     }
 
-    private func deliver(everyone: String, text: String, outcome: VoiceFilterOutcome, learning learns: Bool) -> VoiceCheckResult {
-        let result = VoiceCheckResult(text: text, everyone: everyone, outcome: outcome,
-                                     labelledReplyTime: requestedAt.map { replyTime ?? $0.duration(to: clock.now()) },
-                                     labelRequest: labelRequest)
+    private func delivery(everyone: String, text: String, outcome: VoiceFilterOutcome, learning learns: Bool) -> Delivery {
+        Delivery(result: VoiceCheckResult(text: text, everyone: everyone, outcome: outcome,
+                                          labelledReplyTime: requestedAt.map { replyTime ?? $0.duration(to: clock.now()) },
+                                          labelRequest: labelRequest),
+                 learns: learns)
+    }
+
+    private func commit(_ delivery: Delivery) -> VoiceCheckResult {
+        let result = delivery.result
         recording = nil
         state = .delivered(result)
-        if learns {
+        if delivery.learns {
             learning = Task { [self] in
                 defer { learning = nil }
                 do {
